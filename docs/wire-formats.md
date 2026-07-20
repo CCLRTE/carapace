@@ -1,0 +1,80 @@
+# Wire formats
+
+Carapace wire values are exact, versioned JSON. Parse every value from `unknown`; reject unknown object keys rather than silently accepting a nearby format.
+
+## Reserved query keys
+
+- `__carapace_scenario=<id>` activates a scenario from the product catalog.
+- `__carapace_fixture=<encoded-json>` activates a portable fixture envelope.
+
+Both keys may appear together only when they name the same scenario. Duplicate keys, malformed percent encoding, unknown `__carapace_*` keys, unknown scenarios, oversized queries, and mismatched routes fail closed. Other product query parameters are preserved and ignored by Carapace activation.
+
+## Fixture envelope
+
+Schema: `carapace.fixture/v1`
+
+```json
+{
+  "schema": "carapace.fixture/v1",
+  "scenario": "todos.populated",
+  "route": "/",
+  "world": {
+    "version": 1,
+    "todos": [],
+    "writeFailure": null
+  },
+  "runtime": {
+    "schema": "carapace.runtime/v1",
+    "nowMs": 0,
+    "nextOperation": 1,
+    "acceleration": 100
+  }
+}
+```
+
+The route is derived from the catalog when a fixture is created. Parsing requires it to match the named scenario. The product world parser still runs; a fixture cannot bypass product validation.
+
+## Logical runtime
+
+Schema: `carapace.runtime/v1`
+
+The runtime snapshot records non-negative logical milliseconds, the next positive operation sequence, and an acceleration in the supported finite range. Logical waits advance in call order and do not advance after cancellation.
+
+## Probe
+
+Schema: `carapace.probe/v1`
+
+A probe snapshot contains the activation hash, store generation and revision, conserved activity totals, product-named pending counters, product-named violation counters, JSON-safe remaining-work diagnostics, and derived quiescence.
+
+Consumers must parse a snapshot before trusting it. The parser rejects unknown fields, invalid counters, inconsistent activity conservation, and a quiescence bit that disagrees with activity and pending counters.
+
+## Browser bridge
+
+Schema: `carapace.browser-bridge/v1`
+
+The canonical bridge is installed as `window.__carapace` and exposes:
+
+- `snapshot()` for the current validated probe value;
+- `reset()` for the product-owned reset action; and
+- `coverage` for the JSON-safe coverage catalog.
+
+The coverage value uses schema `carapace.coverage/v1` and has the exact shape:
+
+```json
+{
+  "schema": "carapace.coverage/v1",
+  "entries": [
+    {
+      "key": "todos.completion",
+      "mode": "fixture",
+      "claim": "The real todo interface completes tasks through its product port.",
+      "route": "/",
+      "scenarios": ["todos.populated"]
+    }
+  ]
+}
+```
+
+Consumers must parse the snapshot before using it. Unknown fields, duplicate keys, invalid modes, and inconsistent scenario requirements are rejected.
+
+The bridge is a development automation seam. Do not install it from a production entry.
