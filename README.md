@@ -3,17 +3,17 @@
 Carapace is a TypeScript kernel for running a product's real interface and state machinery against deterministic implementations of product-owned ports. It supplies strict scenario activation, JSON-safe fixtures, logical time, generation-safe stores, probes, exact scripts, and opt-in React and browser bindings.
 
 <!-- article:carapace-a-harness-for-your-frontend:start -->
-## [Carapace: a harness for your frontend](<https://prmte.com/articles/carapace-a-harness-for-your-frontend>)
+## [Carapace tests the real frontend against deterministic state](<https://prmte.com/articles/carapace-a-harness-for-your-frontend>)
 
-> The open-source Carapace kernel keeps the real interface and its state machinery while product-owned runners supply deterministic worlds and evidence.
+> Carapace replaces slow external systems at a product-owned boundary so agents can inspect the real interface. It does not test the systems it replaces.
 
-A coding agent can change a frontend in seconds and still spend minutes proving that the change works. The slow part is often not Chromium. It is reaching the necessary account and records, waiting for services or motion, then turning screenshots into evidence the agent can understand.
+Frontend checks slow down when every run must reach the right account state, seed records, wait for services, and collect evidence.
 
-Carapace is a frontend testing harness built around that mismatch. Its published kernel runs the real interface and state machinery against a deterministic product world, exposes readiness and browser-automation seams, and leaves capture policy to a product-owned runner. It does not replace direct tests of the backend, browser assembly, or operating system. It makes fixture-expressible interface states cheap to inspect.
+Carapace is an open-source frontend testing harness for checks that can run against a modeled product state. It keeps the real interface and state machinery above a deterministic adapter, which returns the same modeled responses and transitions for the same inputs. Its TypeScript kernel manages deterministic sessions and logical time and exposes a probe that reports active and pending work; a product-owned runner chooses the browser driver and evidence. Direct tests still cover the replaced system, full browser assembly, and operating system.
 
-### The harness changes the test composition
+### Keep product behavior above a deterministic port
 
-A conventional end-to-end test assembles the production-shaped system. Carapace changes the composition below the behavior under review. The real shell, components, hooks, reducers, cache invalidation, and navigation remain. External systems are replaced at a product-owned port: an interface between product behavior and a backend, native host, model process, or other service.
+A conventional end-to-end test assembles a production-shaped system. Carapace changes only the composition below the behavior under review. The real interface, product state transitions, data refreshes, and navigation remain. A product-owned port, which is a small interface between product behavior and an external system, supplies the replaceable boundary.
 
 A minimal product-specific layout makes that boundary visible:
 
@@ -32,11 +32,11 @@ product/
     └── evidence.ts                  # screenshots, video, and diagnostics
 ```
 
-The filenames are illustrative; the ownership boundary is not. Production and deterministic runtimes implement the same product-owned port, so the real interface remains above both. Worlds, scenarios, and evidence stay outside production code.
+The filenames are illustrative. The ownership rule is fixed: production and deterministic runtimes implement the same product-owned port, the real interface stays above both, and worlds, scenarios, and evidence stay outside production code.
 
-The [public Todo example](<https://github.com/CCLRTE/carapace/tree/main/examples/todos>) makes the seam concrete. The real `TodoApp` knows only the product's `TodoPort`. The production entry supplies browser storage; the Carapace workbench supplies a deterministic port created by its session:
+The [public Todo example](<https://github.com/CCLRTE/carapace/tree/main/examples/todos>) shows that boundary in code. The real `TodoApp` knows only the product's `TodoPort`. The production entry supplies browser storage. The Carapace workbench supplies a deterministic port created by its session:
 
-**todo-port.ts and entry composition (abridged)**
+**todo-port.ts composition (illustrative excerpt)**
 
 ```typescript
 export interface TodoItem {
@@ -60,27 +60,27 @@ export interface TodoPort {
 <TodoApp port={props.harness.port} />
 ```
 
-The interface uses product words—todos and completion—not storage calls or Carapace types. Behind the port, the deterministic implementation can use a world, logical clock, and activity scope. Replacing that implementation does not change the component under review.
+The interface speaks in product terms: todos and completion. It contains no storage calls or Carapace types. Behind the port, the deterministic runtime can use a world and a logical clock without changing the component under review.
 
-The deterministic side starts with one strict, versioned JSON world. A product adapter turns that world into the same response shapes and state transitions the interface expects. Reads serialize it; writes mutate it; the real mutation, invalidation, and refetch path converges as it would in production. Unknown requests fail loudly instead of falling through to a live service. The fixture is therefore a small executable model of the product state, not a loose pile of endpoint responses.
+The deterministic side starts with one strict, versioned JSON world. A product adapter validates that immutable seed, initializes adapter-local state, and returns the response shapes and transitions the interface expects. Reads return cloned snapshots and writes update adapter-local state. Above the port, the frontend handles each response through its normal state-update path. Unknown requests fail instead of falling through to a live service. The fixture becomes a small executable model of product state.
 
-One web implementation mounts that composition in a same-origin iframe. The iframe is a separate browsing context, so portals stay inside its document, media queries see its viewport, and dynamic viewport units use its height. Its JavaScript context can replace `fetch` without changing the production application. Other products use separate development entries and deterministic implementations of semantic backend or native-runtime ports. The invariant is the same: production and Carapace meet at an owned boundary above the external system that makes verification slow or nondeterministic.
+A web runner may mount that composition in an embedded page served from the same origin. The runner can control the page's viewport and replace `fetch` without changing production code. Other products can use separate development entries and deterministic implementations of backend or native-host ports. In each case, production and Carapace meet at an owned boundary above the external system that makes verification slow or nondeterministic.
 
-### Its speed comes from removing setup
+### Reuse the browser; reset the world
 
-[Playwright’s browser-context isolation](<https://playwright.dev/docs/browser-contexts>) is a strong default for end-to-end tests. Each test gets clean cookies, storage, and pages, which prevents failures from leaking between cases. That clean start still has a cost when every case must navigate, authenticate, seed a backend, wait for data, and reconstruct the application. A Carapace composition keeps isolation at the fixture boundary, allowing a product runner to reuse more of the mounted frontend.
+[Playwright’s browser-context isolation](<https://playwright.dev/docs/browser-contexts>) gives each end-to-end test clean cookies, storage, and pages, which stops cases from leaking state into one another. That clean start costs time when every case must navigate, authenticate, seed a backend, wait for data, and rebuild the application. A Carapace runner can keep a compatible browser worker and application bundle warm while it resets the deterministic world at the fixture boundary.
 
-The published kernel provides deterministic activation, reset, generation fencing, and quiescence primitives. A product-specific runner can use them to replace the world, storage, query state, and page tree while keeping a compatible browser worker and application bundle warm. Source-digest caching and byte-identical screenshot deduplication are optional runner optimizations, not guarantees of the kernel.
+The kernel provides activation, reset, and activity tracking. Each reset gives the store a new generation number. Transactions and tracked operations created under an earlier number become stale and cannot update or settle the new store; product code must still cancel untracked promises and external side effects. A product runner can reset the modeled world, browser storage, application caches, and rendered page between scenarios. Browser reuse is a runner choice, not a kernel guarantee.
 
-Logical time removes another source of delay. Carapace can advance product time faster than wall-clock time when a scenario is testing state transitions rather than animation fidelity. Motion cases still run at real speed when timing itself is under review. Product time remains explicit in the scenario; wall-clock time is spent only where fidelity requires it.
+Logical time removes another delay. Carapace can advance product delays faster than wall-clock time when a scenario tests state transitions. Its runtime snapshot records the logical time, next operation number, and acceleration so a fixture can restore the same clock state. Browser motion still uses wall-clock time and needs a separate motion check.
 
 ### Quiescence replaces sleeps
 
-A fixed delay asks the wrong question: it waits for a duration rather than for the interface to become ready. Carapace exposes quiescence, meaning that the current generation has no known work left. A browser probe can check busy markers, in-flight deterministic requests, pending scripted reveals, loaded fonts and nearby images, and the absence of DOM mutations across consecutive frames. A capture begins when those signals agree, not when an arbitrary second has passed.
+A fixed delay waits for a duration. Quiescence means that the current scenario has reached its declared readiness conditions. Carapace first requires no active operations and all product-named pending counters at zero. A state revision is the number that changes when store state changes. The verifier checks that the reset generation, revision, and counter values remain unchanged for a short, bounded interval. It can also wait for loaded fonts, nearby images, and DOM stability before capture.
 
-The same probe reports violations. An unhandled request, unused exact script step, console error, runtime error, leaked activity lease, or stale generation makes the run fail or leaves an explicit diagnostic. This is where [types and property tests in an agent-operated codebase](<https://prmte.com/articles/the-ai-codebase-types-and-property-tests>) matter: strict parsers keep malformed worlds from selecting a nearby valid state, while generated tests challenge reset, cancellation, serialization, and ordering laws that a few hand-written scenarios would miss.
+The probe reports violation counters and remaining scripted work outside that quiescence gate. A verifier must separately reject an unhandled request, unused required script step, console error, runtime error, leaked work token, or stale generation when that signal matters to the claim. [Types and property tests in an agent-operated codebase](<https://prmte.com/articles/the-ai-codebase-types-and-property-tests>) help at this boundary. Strict parsers reject malformed worlds, while generated tests challenge reset, cancellation, serialization, and ordering laws across many inputs.
 
-The browser-driver helper remains product-owned. In this Playwright-style example, `waitForQuiescence` reads the browser probe until the same generation, revision, and zero-pending state stays stable, then rejects the violation counters relevant to the claim. Carapace does not require Playwright; the agent-authored check can still stay this small:
+The browser-driver helper remains product-owned. In this illustrative Playwright example, `waitForQuiescence` reads the probe until those readiness conditions remain stable. It then rejects relevant violations and required remaining work:
 
 **todo.browser.test.ts (illustrative)**
 
@@ -101,25 +101,15 @@ test("completes a populated todo", async ({ page }) => {
 });
 ```
 
-The check has no login, seed request, CSS selector, or fixed sleep. The named scenario supplies the starting world; the port carries the interaction through real product state; the second join waits for that state to settle.
+The check needs no login, seed request, CSS selector, or fixed sleep. The named scenario supplies the starting world, the port carries the interaction through real frontend state, and the second `waitForQuiescence` call waits for that state to settle.
 
-Quiescence does not prove that the rendered result is correct. It proves that the declared deterministic work settled without a known violation. Semantic assertions, visual review, and direct integration tests still decide whether the result supports the claim.
+Quiescence does not prove that the rendered result is correct. It proves only that the readiness conditions held. The verifier must reject relevant violations and remaining work separately; semantic assertions, visual review, and direct integration tests still decide whether the result supports the claim.
 
-### A runner can compress motion evidence
+### Use Carapace when setup hides frontend state
 
-Video creates a different agent problem. A WebM preserves motion but is expensive to inspect, while uniform one-frame-per-second sampling can miss a menu that flashes, a transition that clips, or content that appears and disappears between samples. A product-specific runner can keep the full recording and use PySceneDetect, a video shot-detection library, to choose a bounded set of frames that better represents changes in the scene.
+Carapace fits when tests spend more effort arranging external state than exercising the interface, and production and deterministic adapters can implement the same product-owned port without copying the behavior under review. Keep the real components, state machinery, and navigation above the port. Put named deterministic worlds below it, wait for explicit quiescence, and tie each piece of evidence to its scenario.
 
-[PySceneDetect’s adaptive detector](<https://www.scenedetect.com/docs/latest/api/detectors.html>) compares adjacent-frame content against a rolling local average. A runner can distribute a frame budget across the detected scenes, favor their beginnings, middles, and endings, remove repeated source frames, and assemble the remainder into a storyboard. PySceneDetect’s version 0.7 path uses presentation timestamps so [variable-frame-rate recordings keep accurate timecodes](<https://www.scenedetect.com/docs/latest/cli/backends.html>). The result gives an agent more transition-relevant evidence without filling its context with every frame.
-
-Scene detection is a selector, not an oracle. It can miss a slow layout drift or a defect that does not create a strong visual boundary. A runner that adopts this technique should record when it falls back to uniform FFmpeg sampling, keep the source video, and treat the storyboard as a reading aid. The published Carapace package does not record video, invoke PySceneDetect or FFmpeg, select frames, or judge images. Deterministic assertions and clean runtime evidence remain the gate; a model reviewing selected frames can be advisory without becoming the definition of correctness.
-
-### Carapace is a method, not a framework
-
-Carapace is a way to structure frontend verification, not a package that replaces a product’s stack. It asks each product to keep the real interface, identify an honest boundary that can be made deterministic, describe meaningful product states as named worlds, and run semantic scenarios against that composition. Familiar browser drivers, test runners, and media tools can sit underneath it.
-
-The mapped responsibilities form a contract: deterministic state enters through an explicit boundary, real product code runs above it, the runner waits for product-defined readiness, and the evidence is tied back to a named scenario. The implementation can differ across web, native, and desktop products while preserving that shape.
-
-That structure is what makes Carapace useful for agents. The published kernel lets an agent request a state by name, act in product terms, and wait on explicit readiness; the product runner decides what bounded evidence to capture. Direct tests still cover the systems behind the substituted boundary. Carapace makes the frontend’s own state graph fast, repeatable, and legible enough to inspect on every change.
+Keep direct integration and end-to-end tests when the backend, native host, browser assembly, or operating system is the behavior under review. If a deterministic adapter would have to reimplement behavior that the claim depends on, it would imitate rather than test that behavior. Carapace narrows the claim to frontend behavior above the port backed by that adapter; the runner may capture screenshots or video, but the kernel does not judge them.
 <!-- article:carapace-a-harness-for-your-frontend:end -->
 
 ## Install
