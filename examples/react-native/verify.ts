@@ -27,7 +27,9 @@ async function exportPlatform(
     "--no-minify",
     "--max-workers",
     "4",
-    ...(platform === "web" ? [] : ["--no-bytecode", "--source-maps", "external"]),
+    ...(platform === "web"
+      ? ["--source-maps", "external"]
+      : ["--no-bytecode", "--source-maps", "external"]),
   ];
   const command = Bun.spawn(arguments_, {
     cwd: exampleRoot,

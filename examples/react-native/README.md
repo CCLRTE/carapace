@@ -34,7 +34,7 @@ bun run example:react-native:typecheck
 bun run example:react-native:verify
 ```
 
-The verifier exports production JavaScript and external source maps for iOS and Android. It requires the real product screen and native adapter, rejects Carapace package modules and web-composition sources structurally, scans for defense-in-depth string markers, then exports and positively identifies the deterministic React Native Web composition. It uses temporary output directories and leaves no build artifacts in the source tree.
+The verifier exports production JavaScript and paired external source maps for iOS and Android. It requires the real product screen and native adapter, rejects Carapace package modules and web-composition sources structurally, and scans for defense-in-depth string markers. It then exports the deterministic React Native Web composition with a paired source map, requires the shared screen, product port, web root, deterministic adapter, and workbench, and rejects native roots or adapters. It uses temporary output directories and leaves no build artifacts in the source tree.
 
 ## What the example proves
 

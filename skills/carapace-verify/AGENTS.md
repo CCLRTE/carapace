@@ -6,5 +6,5 @@
 # Guidelines
 
 - Keep fixture, mixed, and direct evidence distinct; never upgrade a claim from quiet probes alone.
-- Require semantic assertions, exact production surfaces, and explicit reporting of absent browser or direct evidence.
+- Require semantic assertions, exact production surfaces, non-vacuous paired source-map selection where platform resolution matters, and explicit reporting of absent browser or direct evidence.
 - Keep metadata aligned with the skill's actual trigger and workflow.

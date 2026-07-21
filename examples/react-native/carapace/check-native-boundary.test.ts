@@ -15,6 +15,15 @@ const nativeSources = [
   "/src/DeviceStatusApp.tsx",
   "/src/native-device-status-port.ts",
 ] as const;
+const webSources = [
+  "/index.ts",
+  "/src/root.web.tsx",
+  "/src/DeviceStatusApp.tsx",
+  "/src/device-status-port.ts",
+  "/carapace/web-provider.tsx",
+  "/carapace/workbench.tsx",
+  "/carapace/deterministic-device-status-port.ts",
+] as const;
 
 async function temporaryRoot(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "carapace-react-native-boundary-"));
@@ -149,8 +158,9 @@ describe("React Native production boundary", () => {
       "carapace.react-native-example/v1",
       "ios-ready",
     ].join(" "));
+    await writeFile(join(root, "entry.js.map"), JSON.stringify({ sources: webSources }));
     expect(await scanReactNativeCarapaceWebOutput(root)).toEqual({
-      scanned: ["entry.js"],
+      scanned: ["entry.js", "entry.js.map"],
       observedMarkers: [
         "__carapace_scenario",
         "carapace.browser-bridge/v1",
@@ -163,8 +173,49 @@ describe("React Native production boundary", () => {
   test("rejects a web export that selected the production root", async () => {
     const root = await temporaryRoot();
     await writeFile(join(root, "entry.js"), "production device status");
+    await writeFile(join(root, "entry.js.map"), JSON.stringify({ sources: webSources }));
     expect((await rejection(scanReactNativeCarapaceWebOutput(root))).message)
       .toContain("missing markers");
+  });
+
+  test("rejects web output without paired source-map evidence", async () => {
+    const root = await temporaryRoot();
+    await writeFile(join(root, "entry.js"), [
+      "__carapace_scenario",
+      "carapace.browser-bridge/v1",
+      "carapace.react-native-example/v1",
+      "ios-ready",
+    ].join(" "));
+    expect((await rejection(scanReactNativeCarapaceWebOutput(root))).message)
+      .toContain("scanned no emitted source maps");
+  });
+
+  test("requires the web composition sources and rejects native variants", async () => {
+    const missingRoot = await temporaryRoot();
+    await writeFile(join(missingRoot, "entry.js"), [
+      "__carapace_scenario",
+      "carapace.browser-bridge/v1",
+      "carapace.react-native-example/v1",
+      "ios-ready",
+    ].join(" "));
+    await writeFile(join(missingRoot, "entry.js.map"), JSON.stringify({
+      sources: webSources.filter((source) => source !== "/carapace/web-provider.tsx"),
+    }));
+    expect((await rejection(scanReactNativeCarapaceWebOutput(missingRoot))).message)
+      .toContain("missing composition modules");
+
+    const nativeRoot = await temporaryRoot();
+    await writeFile(join(nativeRoot, "entry.js"), [
+      "__carapace_scenario",
+      "carapace.browser-bridge/v1",
+      "carapace.react-native-example/v1",
+      "ios-ready",
+    ].join(" "));
+    await writeFile(join(nativeRoot, "entry.js.map"), JSON.stringify({
+      sources: [...webSources, "/src/root.native.tsx", "/src/native-device-status-port.ts"],
+    }));
+    expect((await rejection(scanReactNativeCarapaceWebOutput(nativeRoot))).message)
+      .toContain("contain native composition modules");
   });
 
   test("rejects web markers found only in metadata", async () => {

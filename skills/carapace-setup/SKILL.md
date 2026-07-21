@@ -18,10 +18,10 @@ Do not simulate a provider SDK or wire protocol when the product can own a small
 
 1. Define the port in production-safe product code.
 2. Move provider, native-module, storage, or service imports into a production adapter.
-3. Compose production from a production-only entry.
-4. Add Carapace as a development dependency and create a distinct Carapace entry and output directory.
+3. Compose production from a production-only graph.
+4. Add Carapace as a development dependency and create a distinct Carapace graph and output directory. Use a separate entry when both compositions target the same platform; a non-shipping Expo web fixture may instead sit behind an extensionless import with `.native` and `.web` implementations below a shared route tree.
 
-Reject a design that conditionally imports fixtures from a query string, build flag, or runtime environment variable inside the production entry.
+Reject a design that conditionally imports fixtures from a query string, build flag, or runtime environment variable inside the production graph. Keep platform-specific navigation providers below shared routes and screens so route discovery sees one stable module while the bundler selects one composition.
 
 ## Define the deterministic surface
 
@@ -50,7 +50,9 @@ Add focused tests for:
 - exact-script consumption and remaining work when scripts are used; and
 - emitted production output containing a forbidden marker.
 
-Build production and Carapace separately. Scan emitted production assets for package names, wire schemas, reserved query keys, fixture and workbench markers, and browser globals. Fail a scan that inspects no files.
+Build production and Carapace separately. Scan emitted production assets for package names, wire schemas, reserved query keys, fixture and workbench markers, and browser globals. Fail a scan that inspects no executable files.
+
+For native bundles, emit a paired source map for each production platform. Positively require stable path suffixes for the shared screen and state, native composition, and production adapters in every map; reject the Carapace package, `.web` composition, fixtures, and workbench sources. Apply the inverse positive selection to a web fixture map. An absence-only scan of an unrelated clean bundle is not proof.
 
 Update the nearest `AGENTS.md`, package README, and command documentation. Run the narrow tests while iterating, then the repository's complete in-scope gate.
 

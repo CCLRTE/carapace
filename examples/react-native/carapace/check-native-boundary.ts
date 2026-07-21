@@ -30,6 +30,20 @@ const REQUIRED_NATIVE_SOURCES = [
   "/src/native-device-status-port.ts",
 ] as const;
 
+const REQUIRED_WEB_SOURCES = [
+  "/src/root.web.tsx",
+  "/src/DeviceStatusApp.tsx",
+  "/src/device-status-port.ts",
+  "/carapace/web-provider.tsx",
+  "/carapace/workbench.tsx",
+  "/carapace/deterministic-device-status-port.ts",
+] as const;
+
+const FORBIDDEN_WEB_SOURCES = [
+  "/src/root.native.tsx",
+  "/src/native-device-status-port.ts",
+] as const;
+
 const SCANNED_EXTENSIONS = new Set([
   ".bundle",
   ".hbc",
@@ -165,16 +179,27 @@ export async function scanReactNativeCarapaceWebOutput(root: string): Promise<{
 }> {
   const scanned: string[] = [];
   const observed = new Set<string>();
+  const observedSources = new Set<string>();
   let executableFiles = 0;
+  let sourceMaps = 0;
+  const executablePaths = new Set<string>();
+  const mappedExecutablePaths = new Set<string>();
   for await (const path of walk(root)) {
     const file = relative(root, path);
     scanned.push(file);
     const contents = await readFile(path);
-    if (EXECUTABLE_EXTENSIONS.has(extname(file).toLowerCase())) {
+    const extension = extname(file).toLowerCase();
+    if (EXECUTABLE_EXTENSIONS.has(extension)) {
       executableFiles += 1;
+      executablePaths.add(file);
       for (const marker of REQUIRED_WEB_MARKERS) {
         if (contents.includes(Buffer.from(marker))) observed.add(marker);
       }
+    }
+    if (extension === ".map") {
+      sourceMaps += 1;
+      mappedExecutablePaths.add(file.slice(0, -".map".length));
+      for (const source of sourceMapSources(contents, file)) observedSources.add(source);
     }
   }
   if (scanned.length === 0) {
@@ -183,9 +208,31 @@ export async function scanReactNativeCarapaceWebOutput(root: string): Promise<{
   if (executableFiles === 0) {
     throw new Error(`React Native Carapace web boundary scanned no emitted executable bundles under ${root}`);
   }
+  if (sourceMaps === 0) {
+    throw new Error(`React Native Carapace web boundary scanned no emitted source maps under ${root}`);
+  }
+  const unmappedExecutables = [...executablePaths]
+    .filter((file) => !mappedExecutablePaths.has(file));
+  if (unmappedExecutables.length > 0) {
+    throw new Error(
+      `React Native Carapace web output has executables without paired source maps: ${unmappedExecutables.join(", ")}`,
+    );
+  }
   const missing = REQUIRED_WEB_MARKERS.filter((marker) => !observed.has(marker));
   if (missing.length > 0) {
     throw new Error(`React Native Carapace web output is missing markers: ${missing.join(", ")}`);
+  }
+  const missingSources = REQUIRED_WEB_SOURCES.filter((source) => !observedSources.has(source));
+  if (missingSources.length > 0) {
+    throw new Error(
+      `React Native Carapace web source maps are missing composition modules: ${missingSources.join(", ")}`,
+    );
+  }
+  const forbiddenSources = FORBIDDEN_WEB_SOURCES.filter((source) => observedSources.has(source));
+  if (forbiddenSources.length > 0) {
+    throw new Error(
+      `React Native Carapace web source maps contain native composition modules: ${forbiddenSources.join(", ")}`,
+    );
   }
   return Object.freeze({
     scanned: Object.freeze(scanned),

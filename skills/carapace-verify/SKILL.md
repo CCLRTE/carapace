@@ -40,9 +40,9 @@ Definition activation, parser tests, and adapter unit tests do not close a claim
 
 ## Verify production exclusion
 
-Build the real production entry independently. Run its emitted-marker scanner across every declared production surface. Require at least one scanned file and reject package names, wire schemas, reserved query keys, fixtures, workbench strings, and browser bridge globals.
+Build the real production graph independently. Run its emitted-boundary scanner across every declared production surface. Require at least one executable bundle and reject package names, wire schemas, reserved query keys, fixtures, workbench strings, and browser bridge globals.
 
-Remember that a clean marker scan proves only absence of those markers in those files. It does not prove native linkage, service behavior, or runtime loading.
+When a bundler selects platform variants, require a paired source map for every executable and every production platform. Positively match the declared shared behavior, native composition, and production-adapter modules in each map; reject Carapace and web-fixture paths. Verify the inverse selection for the fixture graph. A clean marker scan proves only absence of those markers in those files, and a clean unrelated bundle proves nothing. Source selection still does not prove native linkage, service behavior, runtime loading, or device behavior.
 
 ## Classify the evidence
 
