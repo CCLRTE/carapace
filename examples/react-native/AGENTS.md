@@ -4,7 +4,7 @@
 - `carapace/` – strict worlds, definition, deterministic adapter, session, React Native Web workbench, tests, and native-output scanner.
 - `app.json`, `index.ts`, and `metro.config.cjs` – minimal Expo application and package or local-source resolution.
 - `verify.ts` – isolated iOS, Android, and web exports plus native production-boundary scans.
-- `guide.md` – commands, structure, scenarios, and proof limits; exported publicly as `README.md`.
+- `README.md` – commands, structure, scenarios, and proof limits.
 
 # Guidelines
 
