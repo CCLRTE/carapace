@@ -1,6 +1,6 @@
 # Expo / React Native example
 
-This Expo app distills the production boundary used by Gnrte into a small external example. The same `DeviceStatusApp` renders in both compositions:
+This small Expo app demonstrates a production-safe boundary for Carapace. The same `DeviceStatusApp` renders in both compositions:
 
 ```text
                   DeviceStatusApp

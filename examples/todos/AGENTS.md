@@ -12,5 +12,6 @@
 - Keep `src/` free of Carapace imports and vocabulary. The real interface depends only on `TodoPort`.
 - Keep the local-storage adapter production-safe and validate stored JSON before returning it.
 - Keep the Carapace entry separate, network-silent, and development-only.
+- Use only public package names, repository paths, and commands in example code and documentation; do not refer to or infer non-public systems, products, paths, packages, or implementation details.
 - Build production before running the marker scan; fail when the scanner finds no emitted files.
 - Update the scenario catalog, coverage catalog, example tests, and README together.

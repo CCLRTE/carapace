@@ -3,7 +3,6 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const TODO_PRODUCTION_MARKERS = Object.freeze([
-  ["@", "jungle", "/carapace"].join(""),
   "@cclrte/carapace",
   "carapace.fixture/v1",
   "carapace.runtime/v1",

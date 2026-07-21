@@ -3,7 +3,6 @@ import { extname, join, relative } from "node:path";
 
 const FORBIDDEN_MARKERS = [
   "@cclrte/carapace",
-  ["@jungle", "carapace"].join("/"),
   "__carapace_scenario",
   "__carapace_fixture",
   "carapace.browser-bridge/v1",
