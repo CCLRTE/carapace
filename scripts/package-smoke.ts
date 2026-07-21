@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 const packageName = "@cclrte/carapace";
 const importSpecifiers = ["@cclrte/carapace","@cclrte/carapace/core","@cclrte/carapace/react","@cclrte/carapace/testing","@cclrte/carapace/web"];
-const verificationPackages = ["react@19.2.3","@eslint/js@^9.39.2","@types/bun@^1.3.14","@types/react@^19.2.14","@types/react-dom@^19.2.3","@vitejs/plugin-react@^6.0.3","eslint@^9.39.2","fast-check@^4.8.0","react-dom@19.2.3","typescript@^6.0.3","typescript-eslint@^8.53.0","vite@^8.1.5"];
+const verificationPackages = ["react@19.2.3","@expo/metro-runtime@~57.0.6","@eslint/js@^9.39.2","@types/bun@^1.3.14","@types/react@^19.2.14","@types/react-dom@^19.2.3","@vitejs/plugin-react@^6.0.3","eslint@^9.39.2","expo@~57.0.7","fast-check@^4.8.0","react-dom@19.2.3","react-native@0.86.0","react-native-web@~0.21.2","typescript@^6.0.3","typescript-eslint@^8.53.0","vite@^8.1.5"];
 
 async function run(command: readonly string[], cwd: string): Promise<void> {
   const process = Bun.spawn(command, { cwd, stdout: "inherit", stderr: "inherit" });

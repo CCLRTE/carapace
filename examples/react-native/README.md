@@ -1,0 +1,47 @@
+# Expo / React Native example
+
+This Expo app distills the production boundary used by Gnrte into a small external example. The same `DeviceStatusApp` renders in both compositions:
+
+```text
+                  DeviceStatusApp
+                         |
+                 DeviceStatusPort
+                    /          \
+       root.native.tsx          root.web.tsx
+       React Native adapter     Carapace session
+       iOS / Android            deterministic world
+```
+
+Metro selects `root.native.tsx` for iOS and Android and `root.web.tsx` for the development web surface. The native root cannot reach the Carapace world, deterministic adapter, workbench, browser bridge, or fetch firewall.
+
+## Run it
+
+From the Carapace repository root:
+
+```sh
+bun install --frozen-lockfile --ignore-scripts
+bun run build
+bun run example:react-native
+```
+
+Open the Expo URL printed for web. Select `iOS · light`, `Android · dark`, or `Inspection failure` in the scenario sidebar. Add `carapaceFrame=1` to a scenario URL to render only the device frame.
+
+Run the complete non-simulator gate with:
+
+```sh
+bun run example:react-native:test
+bun run example:react-native:typecheck
+bun run example:react-native:verify
+```
+
+The verifier exports production JavaScript and external source maps for iOS and Android. It requires the real product screen and native adapter, rejects Carapace package modules and web-composition sources structurally, scans for defense-in-depth string markers, then exports and positively identifies the deterministic React Native Web composition. It uses temporary output directories and leaves no build artifacts in the source tree.
+
+## What the example proves
+
+`ios-ready`, `android-dark`, and `inspection-failure` compose the real React Native component and asynchronous screen state through a deterministic product port. Unit tests exercise the strict worlds, scenario coverage, port success/failure/cancellation, probe accounting, and Strict Mode-style mount cleanup/replay. The session exposes the canonical browser probe, blocks unmapped application `fetch` calls, and disposes in-flight operations.
+
+The checked gate does not launch a browser or make semantic assertions against rendered DOM. A product verifier must still boot each claimed scenario, join the browser probe, and assert the expected accessible state and interactions. The web export check proves that Metro selected the deterministic composition; it is not a substitute for those runtime assertions.
+
+This is fixture evidence. It does not exercise React Native platform detection, `Appearance`, native layout, Metro's host runtime, operating-system behavior, or a physical device. Those remain the `native.platform.direct` coverage claim. The iOS and Android scans prove that the emitted bundles selected the expected native composition and that their configured marker and source-map policies found no Carapace dependency.
+
+The example intentionally uses the existing `@cclrte/carapace/react`, `@cclrte/carapace/testing`, and `@cclrte/carapace/web` surfaces. React bindings already work with React Native, while the workbench, scenarios, product ports, and platform metadata belong to the app.

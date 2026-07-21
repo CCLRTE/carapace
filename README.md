@@ -11,7 +11,7 @@ Pin the public repository to an immutable version tag:
 ```json
 {
   "devDependencies": {
-    "@cclrte/carapace": "github:CCLRTE/carapace#v0.1.0"
+    "@cclrte/carapace": "github:CCLRTE/carapace#v0.2.0"
   }
 }
 ```
@@ -89,13 +89,15 @@ if (!definition.ok) throw new Error(definition.error.message);
 
 Use `createCarapaceSession` from `@cclrte/carapace/testing` to activate the definition, create product adapters, account for asynchronous work, expose a probe, and dispose the composition as one unit. The [todo example](https://github.com/CCLRTE/carapace/tree/main/examples/todos) shows the complete path.
 
+For React Native, use the same React, testing, and web surfaces from a platform-resolved Expo composition. The [React Native example](https://github.com/CCLRTE/carapace/tree/main/examples/react-native) renders one real screen through a native production port on iOS and Android and a deterministic Carapace port on web. It exports and scans both native bundles without requiring a simulator.
+
 ## Package surfaces
 
 | Import | Purpose | Runtime boundary |
 | --- | --- | --- |
 | `@cclrte/carapace` | Definitions, scenarios, fixtures, logical time, stores, effects, resources, and coverage | Framework-free |
 | `@cclrte/carapace/core` | Explicit alias of the default core surface | Framework-free |
-| `@cclrte/carapace/react` | Typed context, provider, and external-store hooks | Optional React peer |
+| `@cclrte/carapace/react` | Typed context, provider, and external-store hooks for React DOM or React Native | Optional React peer |
 | `@cclrte/carapace/testing` | Sessions, activity scopes, probes, and exact scripted transports | Development and verification |
 | `@cclrte/carapace/web` | Browser automation bridge and application-fetch firewall | Browser only |
 
@@ -122,7 +124,7 @@ A quiet probe means the declared deterministic work settled. It does not prove t
 
 ## Repository scope
 
-This repository contains the deterministic kernel, browser bridge, production-exclusion pattern, agent skills, and a small runnable example. It does not contain a browser driver, browser-worker pool, screenshot deduplication, video recording, PySceneDetect integration, or storyboard generation. Use the browser tooling that fits your product and treat recorded media as evidence, not as the definition of correctness.
+This repository contains the deterministic kernel, browser bridge, production-exclusion pattern, agent skills, a small React example, and an Expo/React Native reference app. It does not contain a browser driver, browser-worker pool, screenshot deduplication, video recording, PySceneDetect integration, or storyboard generation. Use the browser tooling that fits your product and treat recorded media as evidence, not as the definition of correctness.
 
 ## Develop
 
@@ -135,9 +137,14 @@ bun run example:verify
 bun run example:build
 bun run example:check-boundary
 bun run example:build:carapace
+bun run example:react-native:test
+bun run example:react-native:typecheck
+bun run example:react-native:verify
 ```
 
 Run the production app with `bun run example:dev`. Run the deterministic workbench with `bun run example:carapace`, then select `empty`, `populated`, or `write failure` from its scenario navigation.
+
+Run the Expo workbench with `bun run example:react-native`. Its verification command exports iOS and Android production bundles with source maps, proves the expected native entries were selected, rejects Carapace and web-composition modules, and exports the deterministic React Native Web composition into temporary directories. It does not replace browser-driven semantic assertions or direct device evidence.
 
 See [Architecture](./docs/architecture.md), [Adoption](./docs/adoption.md), [Verification](./docs/verification.md), and [Wire formats](./docs/wire-formats.md) for durable contracts.
 

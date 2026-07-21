@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "allowJs": true,
+    "customConditions": ["react-native"],
+    "jsx": "react-jsx",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "paths": {
+      "@cclrte/carapace": ["../../src/index.ts"],
+      "@cclrte/carapace/core": ["../../src/core/index.ts"],
+      "@cclrte/carapace/react": ["../../src/react.ts"],
+      "@cclrte/carapace/testing": ["../../src/testing/index.ts"],
+      "@cclrte/carapace/web": ["../../src/web.ts"]
+    },
+    "types": ["bun", "react", "react-native"]
+  },
+  "include": [
+    "index.ts",
+    "metro.config.cjs",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "carapace/**/*.ts",
+    "carapace/**/*.tsx",
+    "verify.ts"
+  ]
+}

@@ -49,3 +49,11 @@ Test the parser, definition, deterministic adapters, failures, cancellation, cle
 Wait for a stable quiet probe, reject relevant violations and runtime errors, assert behavior in product terms, and retain the evidence needed by each coverage claim.
 
 The [todo example](https://github.com/CCLRTE/carapace/tree/main/examples/todos) implements this sequence without a backend or credentials.
+
+## React Native and Expo
+
+Use a platform-resolved root rather than a runtime flag. The native root imports production adapters and the real screen. The web root imports the Carapace world, session, deterministic ports, workbench, browser bridge, and fetch firewall, then renders that same screen through the same product-owned port.
+
+Export iOS and Android independently and scan their emitted output for package, query, wire, fixture, and workbench markers. Export the web composition separately. These gates prove structural exclusion and deterministic browser assembly; native layout, modules, platform values, OS behavior, and physical-device behavior remain direct evidence.
+
+The [React Native example](https://github.com/CCLRTE/carapace/tree/main/examples/react-native) is a minimal Expo implementation of this split.

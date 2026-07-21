@@ -24,7 +24,7 @@ Carapace owns product-neutral mechanics:
 - generation-fenced stores, atomic transactions, activity accounting, and effects;
 - scenario and fixture/mixed/direct coverage catalogs;
 - deterministic sessions, probes, and exact scripted transports;
-- optional React store bindings; and
+- optional React store bindings that work with React DOM and React Native; and
 - an optional browser bridge and fail-closed application-fetch firewall.
 
 ## Treat the world as a seed
@@ -51,6 +51,20 @@ A clean marker scan is narrow evidence: the scanned files did not contain the co
 
 ## Keep optional surfaces isolated
 
-The default and `/core` exports do not import React or browser globals. React bindings live under `/react`, session and scripted test utilities under `/testing`, and browser globals under `/web`.
+The default and `/core` exports do not import React or browser globals. React bindings live under `/react`, session and scripted test utilities under `/testing`, and browser globals under `/web`. The package runtime does not import React Native or Expo; the React Native example composes these existing surfaces from a platform-resolved web entry.
 
 The fetch firewall intercepts application calls to the `fetch` function in its JavaScript realm. It does not intercept WebSockets, EventSource, navigation, asset loading, native calls, or traffic in another realm. Install it only in a Carapace browser entry.
+
+## Resolve React Native compositions structurally
+
+For an Expo product, let Metro choose distinct roots:
+
+```text
+root.native.tsx                 root.web.tsx
+       |                              |
+native product adapters       Carapace session + adapters
+       |                              |
+       +-------- real screen --------+
+```
+
+Keep the default root production-safe, keep Carapace in `devDependencies`, and scan emitted iOS and Android output. React Native Web fixture evidence exercises the real component and product state, not the native platform, operating system, or device.

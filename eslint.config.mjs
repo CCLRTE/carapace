@@ -12,4 +12,18 @@ export default tseslint.config(
       "@typescript-eslint/no-invalid-void-type": "off",
     },
   },
+  {
+    files: ["examples/react-native/metro.config.cjs"],
+    languageOptions: {
+      sourceType: "commonjs",
+      globals: {
+        __dirname: "readonly",
+        module: "readonly",
+        require: "readonly",
+      },
+    },
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
+    },
+  },
 );

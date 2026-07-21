@@ -39,12 +39,16 @@ Never report a fixture scenario as proof of the adapter, service, host, browser 
 
 ## Scan production output
 
-Build the production entry independently, then scan emitted JavaScript, source maps, HTML, CSS, native bundles, executables, or packaged assets as appropriate. Each product owns marker policy. Include the package name, wire schemas, reserved query keys, fixture identifiers, bridge globals, and product workbench markers.
+Build the production entry independently, then scan emitted JavaScript, source maps, HTML, CSS, native bundles, executables, or packaged assets as appropriate. Each product owns marker policy. Include the package name, wire schemas, reserved query keys, fixture identifiers, bridge globals, and product workbench markers. When a bundler removes import specifiers, inspect source-map module paths as structural evidence too.
 
-Fail when no expected production files were scanned. A vacuous scan is not evidence.
+Fail when no expected executable and source-map files were scanned, and positively require stable markers for the intended production entry. An empty, metadata-only, or unrelated clean bundle is not evidence.
 
 ## Preserve bounded evidence
 
 Record the scenario identifier, activation hash, route, final probe, semantic assertions, violations, console and page errors, and artifact paths. Keep generated evidence out of source control unless the repository explicitly treats a fixture or baseline as reviewed source.
 
 Carapace does not include browser-worker reuse, screenshot deduplication, video capture, scene detection, or storyboard generation. A product may add those mechanisms without changing the probe and coverage contracts.
+
+## Verify React Native exclusion
+
+An Expo web export may intentionally contain Carapace while iOS and Android production exports must not. Build each platform through its real Metro entry resolution with external source maps. Require native product and adapter markers, reject Carapace or web-composition modules from the maps, scan emitted contents as defense in depth, and positively require Carapace markers from the web export. Keep native platform, module, layout, and device claims `direct` even when the React Native Web composition and both exclusion scans pass.

@@ -10,6 +10,23 @@
     "module": "Preserve",
     "moduleResolution": "Bundler",
     "moduleDetection": "force",
+    "paths": {
+      "@cclrte/carapace": [
+        "./src/index.ts"
+      ],
+      "@cclrte/carapace/core": [
+        "./src/core/index.ts"
+      ],
+      "@cclrte/carapace/react": [
+        "./src/react.ts"
+      ],
+      "@cclrte/carapace/testing": [
+        "./src/testing/index.ts"
+      ],
+      "@cclrte/carapace/web": [
+        "./src/web.ts"
+      ]
+    },
     "jsx": "react-jsx",
     "verbatimModuleSyntax": true,
     "strict": true,
