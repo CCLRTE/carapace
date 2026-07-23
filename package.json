@@ -117,7 +117,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
     "eslint": "^9.39.2",
-    "expo": "~57.0.7",
+    "expo": "~57.0.8",
     "fast-check": "^4.8.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
