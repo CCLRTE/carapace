@@ -137,9 +137,9 @@ Frontend checks slow down when the state worth reviewing sits behind a login, a 
 
 Carapace changes the development composition below the behavior under review. The product keeps its real interface and feature state while deterministic adapters replace slow external systems. A Carapace definition names the available worlds and evidence claims, a session owns one activated world's lifecycle, and one browser installation exposes its probe while denying unmapped application requests. The product's verifier still chooses the actions, assertions, browser driver, and evidence.
 
-![The real interface and feature state stay above deterministic adapters that replace slow external systems, alongside the definition, session, browser installation, and product verifier responsibilities.](<https://prmte.com/article-diagrams/carapace-a-harness-for-your-frontend.light.webp>)
+![The same interface cycles through named scenes, instant resets, and repeatable checks.](<https://prmte.com/article-diagrams/carapace-a-harness-for-your-frontend.light.webp>)
 
-*Carapace changes the development composition below the real interface and feature state.*
+*Carapace keeps the interface while making scenes quick to reset and check.*
 
 ### Change the composition below the behavior
 
