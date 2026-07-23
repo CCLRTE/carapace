@@ -9,6 +9,8 @@ import { createCarapaceActivityScope } from "./activity.js";
 import {
   DEFAULT_SCRIPTED_TRANSPORT_LIMITS,
   createExactScriptedTransport,
+  type ScriptedTransportListener,
+  type ScriptedTransportListenerErrorReporter,
   type ScriptedTransportLimits,
 } from "./scripted-transport.js";
 
@@ -26,10 +28,15 @@ interface TestFailure extends JsonObject {
 }
 
 function parseRequest(input: unknown): TestRequest {
-  if (!isRecord(input) || !Number.isSafeInteger(input.id) || typeof input.payload !== "string") {
+  if (
+    !isRecord(input)
+    || typeof input.id !== "number"
+    || !Number.isSafeInteger(input.id)
+    || typeof input.payload !== "string"
+  ) {
     throw new Error("Request must contain integer id and string payload");
   }
-  return { id: input.id as number, payload: input.payload };
+  return { id: input.id, payload: input.payload };
 }
 
 function parseResponse(input: unknown): TestResponse {
@@ -103,7 +110,7 @@ describe("exact scripted transport", () => {
     ]);
     if (!transport.ok) throw new Error(transport.error.message);
     const observed: string[] = [];
-    const unsubscribe = transport.value.subscribe((event) => observed.push(event));
+    const unsubscribe = transport.value.subscribe((event) => { observed.push(event); });
 
     const responsePromise = transport.value.request({ payload: "hello", id: 1 });
     void responsePromise.then(() => observed.push("response"));
@@ -204,7 +211,7 @@ describe("exact scripted transport", () => {
     });
     if (!transport.ok) throw new Error(transport.error.message);
     const observed: string[] = [];
-    transport.value.subscribe((event) => observed.push(event));
+    transport.value.subscribe((event) => { observed.push(event); });
 
     const response = transport.value.request({ id: 1, payload: "slow" });
     const logicalAtDisposal = runtime.snapshot();
@@ -254,7 +261,7 @@ describe("exact scripted transport", () => {
     });
     if (!transport.ok) throw new Error(transport.error.message);
     const observed: string[] = [];
-    transport.value.subscribe((event) => observed.push(event));
+    transport.value.subscribe((event) => { observed.push(event); });
     const unsubscribe = store.value.subscribe(() => {
       if (store.value.getSnapshot().activity.active === 1) transport.value.dispose();
     });
@@ -280,7 +287,7 @@ describe("exact scripted transport", () => {
     }]);
     if (!transport.ok) throw new Error(transport.error.message);
     const observed: string[] = [];
-    transport.value.subscribe((event) => observed.push(event));
+    transport.value.subscribe((event) => { observed.push(event); });
 
     const response = transport.value.request({ id: 1, payload: "settled" });
     const disposed = response.then(() => transport.value.dispose());
@@ -429,6 +436,119 @@ describe("exact scripted transport", () => {
     expect(transport.value.assertDrained()).toMatchObject({
       ok: false,
       error: { code: "internal-failure", message: "subscriber broke" },
+    });
+  });
+
+  test("contains rejected asynchronous listeners and retains the synchronous-contract violation", async () => {
+    const transport = transportFixture([{
+      request: { id: 1, payload: "event" },
+      outcome: { kind: "response", value: { accepted: true } },
+      eventsBefore: ["event"],
+    }]);
+    if (!transport.ok) throw new Error(transport.error.message);
+    transport.value.subscribe((() => Promise.reject(new Error("listener rejected"))) as unknown as
+      ScriptedTransportListener<string>);
+
+    expect(await transport.value.request({ id: 1, payload: "event" })).toMatchObject({ ok: true });
+    expect(await transport.value.whenIdle()).toMatchObject({
+      ok: false,
+      error: {
+        code: "internal-failure",
+        message: "Scripted transport listeners must complete synchronously and return undefined",
+      },
+    });
+    expect(transport.value.violationCount()).toBe(1);
+    await Promise.resolve();
+  });
+
+  test("contains rejected asynchronous listener-error reporters as a second drain violation", async () => {
+    const transport = createExactScriptedTransport({
+      runtime: createLogicalRuntime(undefined, () => Promise.resolve()),
+      parseRequest,
+      parseResponse,
+      parseEvent,
+      parseFailure,
+      onListenerError: (() => Promise.reject(new Error("reporter rejected"))) as unknown as
+        ScriptedTransportListenerErrorReporter,
+      steps: [{
+        request: { id: 1, payload: "event" },
+        outcome: { kind: "response", value: { accepted: true } },
+        eventsBefore: ["event"],
+      }],
+    });
+    if (!transport.ok) throw new Error(transport.error.message);
+    transport.value.subscribe(() => {
+      throw new Error("listener threw");
+    });
+
+    expect(await transport.value.request({ id: 1, payload: "event" })).toMatchObject({ ok: true });
+    expect(await transport.value.whenIdle()).toMatchObject({ ok: false, error: { code: "internal-failure" } });
+    expect(transport.value.violationCount()).toBe(2);
+    await Promise.resolve();
+  });
+
+  test("captures parser and runtime references before retaining caller configuration", async () => {
+    const options = {
+      runtime: createLogicalRuntime(undefined, () => Promise.resolve()),
+      parseRequest,
+      parseResponse,
+      parseEvent,
+      parseFailure,
+      steps: [{
+        request: { id: 1, payload: "captured" },
+        outcome: { kind: "response", value: { accepted: true } },
+        delayMs: 5,
+      }],
+    };
+    const transport = createExactScriptedTransport(options);
+    if (!transport.ok) throw new Error(transport.error.message);
+
+    options.parseRequest = () => {
+      throw new Error("mutated parser must not run");
+    };
+    options.runtime = createLogicalRuntime(undefined, () => Promise.reject(new Error("mutated wait must not run")));
+
+    expect(await transport.value.request({ id: 1, payload: "captured" })).toEqual({
+      ok: true,
+      value: { accepted: true },
+    });
+    expect(await transport.value.whenIdle()).toEqual({ ok: true, value: true });
+    expect(transport.value.assertDrained()).toEqual({ ok: true, value: true });
+  });
+
+  test("turns hostile option access into a definition Result", () => {
+    const hostileOptions = new Proxy({}, {
+      get: () => {
+        throw new Error("option getter failed");
+      },
+    });
+    expect(createExactScriptedTransport(hostileOptions as never)).toMatchObject({
+      ok: false,
+      error: { code: "invalid-options", message: "option getter failed" },
+    });
+    const baseLimits: ScriptedTransportLimits = {
+      maxSteps: 1,
+      maxEventsPerStep: 1,
+      maxRecordedInternalErrors: 1,
+      maxLogicalDelayPerStepMs: 0,
+      maxTotalLogicalDelayMs: 0,
+    };
+    const hostileLimits = new Proxy(baseLimits, {
+      ownKeys: () => {
+        throw new Error("limit inspection failed");
+      },
+    });
+    expect(createExactScriptedTransport({
+      runtime: createLogicalRuntime(undefined, () => Promise.resolve()),
+      parseRequest,
+      parseResponse,
+      parseEvent,
+      parseFailure,
+      steps: [],
+      limits: hostileLimits,
+    })).toMatchObject({
+      ok: false,
+      error: { code: "invalid-options", message: "limit inspection failed" },
     });
   });
 

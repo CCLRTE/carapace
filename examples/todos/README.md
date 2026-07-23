@@ -11,7 +11,7 @@ local  deterministic
 storage world + logical time
 ```
 
-The production entry under `src/` uses browser local storage and contains no Carapace import. The separate entry under `carapace/` uses a strict JSON world, `defineCarapace`, `createCarapaceSession`, an in-memory adapter, the browser bridge, and the fail-closed fetch firewall.
+The production entry under `src/` uses browser local storage and contains no Carapace import. The separate entry under `carapace/` uses `defineCarapace` for its strict worlds and claims, `createCarapaceSession` for one activated harness, and `installCarapaceBrowser` for one atomic bridge and fail-closed fetch boundary.
 
 ## Run it
 
@@ -36,7 +36,7 @@ bun run example:typecheck
 bun run example:verify
 ```
 
-`example:verify` builds production and Carapace into an isolated temporary directory, scans every emitted production file for forbidden markers, and removes the directory even when verification fails. The individual build commands are useful while iterating:
+`example:verify` builds production and Carapace into an isolated temporary directory, proves both emitted source-map graphs contain their expected entry modules, scans every emitted production file for forbidden markers, and removes the directory even when verification fails. The individual build commands are useful while iterating:
 
 ```sh
 bun run example:build
@@ -44,6 +44,6 @@ bun run example:check-boundary
 bun run example:build:carapace
 ```
 
-The boundary command scans emitted production output for package names, query keys, wire schemas, browser globals, and workbench markers. It fails if no files were scanned.
+The boundary command requires emitted HTML and source-mapped JavaScript, proves the production graph contains the real UI and local-storage composition, rejects sources outside `src/`, and scans every emitted file for package names, query keys, wire schemas, browser globals, and workbench markers. The full verifier separately proves that the Carapace graph contains the development entry, deterministic port, shared UI, and atomic browser installation without importing the production storage composition.
 
 The fixture claims cover interface behavior through the deterministic port. The coverage catalog keeps local-storage serialization as a direct claim because the in-memory adapter does not exercise browser storage behavior.

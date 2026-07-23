@@ -15,7 +15,7 @@ import {
   scenarioId,
   serializeFixtureJson,
 } from "./index.js";
-import { parseTestWorld, testScenarios, type TestRoute, type TestWorld } from "./test-support.js";
+import { parseTestWorld, testScenarios } from "./test-support.js";
 
 describe("strict identifiers", () => {
   test("accepts separated lowercase identifiers and rejects ambiguous text", () => {
@@ -131,25 +131,25 @@ describe("queued faults", () => {
     const second = consumeFault(first.queue, (entry) => entry.id === id);
     const exhausted = consumeFault(second.queue, (entry) => entry.id === id);
 
-    expect(first.effect).toBe("offline");
+    expect(first).toMatchObject({ kind: "consumed", effect: "offline" });
     expect(first.queue[0]?.remaining).toBe(1);
-    expect(second.effect).toBe("offline");
+    expect(second).toMatchObject({ kind: "consumed", effect: "offline" });
     expect(second.queue).toEqual([]);
-    expect(exhausted.effect).toBeNull();
+    expect(exhausted).toEqual({ kind: "empty", queue: [] });
   });
 });
 
 describe("coverage catalog", () => {
   test("rejects duplicates and requires an exact declared key set", () => {
-    const duplicate = createCoverageCatalog<TestWorld, TestRoute>([
-      { key: "chat.empty", mode: "fixture", claim: "Empty state renders", route: "/chat", scenarios: ["chat.empty"] },
-      { key: "chat.empty", mode: "direct", claim: "Native lifecycle works", route: null, scenarios: [] },
+    const duplicate = createCoverageCatalog([
+      { key: "chat.empty", mode: "fixture", claim: "Empty state renders", scenarios: ["chat.empty"] },
+      { key: "chat.empty", mode: "direct", claim: "Native lifecycle works", scenarios: [] },
     ], testScenarios());
     expect(duplicate).toMatchObject({ ok: false, error: { code: "duplicate-coverage" } });
 
-    const catalog = createCoverageCatalog<TestWorld, TestRoute>([
-      { key: "chat.empty", mode: "fixture", claim: "Empty state renders", route: "/chat", scenarios: ["chat.empty"] },
-      { key: "native.lifecycle", mode: "direct", claim: "Native lifecycle works", route: null, scenarios: [] },
+    const catalog = createCoverageCatalog([
+      { key: "chat.empty", mode: "fixture", claim: "Empty state renders", scenarios: ["chat.empty"] },
+      { key: "native.lifecycle", mode: "direct", claim: "Native lifecycle works", scenarios: [] },
     ], testScenarios());
     if (!catalog.ok) {
       throw new Error(catalog.error.message);

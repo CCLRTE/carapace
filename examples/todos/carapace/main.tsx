@@ -1,12 +1,7 @@
-import { createCoverageCatalogSnapshot } from "@cclrte/carapace";
-import {
-  installCarapaceBrowserBridge,
-  installCarapaceFetchFirewall,
-} from "@cclrte/carapace/web";
+import { installCarapaceBrowser } from "@cclrte/carapace/web";
 import { createRoot } from "react-dom/client";
 
 import "../src/styles.css";
-import { todoCarapaceDefinition } from "./definition";
 import { createTodoCarapaceSession } from "./session";
 import { TodoCarapaceError, TodoCarapaceWorkbench } from "./workbench";
 import "./workbench.css";
@@ -20,40 +15,27 @@ if (!created.ok) {
   root.render(<TodoCarapaceError message={created.error.message} />);
 } else {
   const session = created.value;
-  const uninstallFirewall = installCarapaceFetchFirewall({
-    beginActivity: () => {
-      const lease = session.activity.begin("browser-fetch");
-      if (!lease.ok) {
-        session.product.recordActivityFailure();
-        return () => undefined;
-      }
-      return () => {
-        if (!lease.value.release().ok) session.product.recordActivityFailure();
-      };
+  const installedBrowser = installCarapaceBrowser({
+    session,
+    reset: () => {
+      globalThis.location.reload();
+      return undefined;
     },
-    onBlocked: session.product.recordBlockedNetworkRequest,
+    firewall: {
+      onActivityError: session.harness.recordActivityFailure,
+      onBlocked: session.harness.recordBlockedNetworkRequest,
+    },
   });
-  const installedBridge = installCarapaceBrowserBridge({
-    probe: session.probe,
-    coverage: createCoverageCatalogSnapshot(todoCarapaceDefinition.coverage),
-    reset: () => globalThis.location.reload(),
-  });
-  if (!installedBridge.ok) {
-    uninstallFirewall();
+  if (!installedBrowser.ok) {
     session.dispose();
-    throw new Error(installedBridge.error.message);
+    throw new Error(installedBrowser.error.message);
   }
 
-  const dispose = (): void => {
-    installedBridge.value();
-    uninstallFirewall();
-    session.dispose();
-  };
-  globalThis.addEventListener("pagehide", dispose, { once: true });
+  globalThis.addEventListener("pagehide", session.dispose, { once: true });
   root.render(
     <TodoCarapaceWorkbench
       activeScenario={session.activation.scenario}
-      harness={session.product}
+      harness={session.harness}
     />,
   );
 }

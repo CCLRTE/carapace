@@ -1,18 +1,27 @@
 import {
-  createCarapaceStore,
-  createLogicalRuntime
-} from "../index-avpdb8ge.js";
+  createCarapaceStore
+} from "../index-mmcdjksg.js";
+import {
+  createLogicalRuntime,
+  parseLogicalRuntimeSnapshot
+} from "../index-2mb8zsze.js";
+import {
+  CARAPACE_PROBE_SCHEMA,
+  MAX_CARAPACE_PROBE_COUNTERS,
+  createCarapaceProbe,
+  parseCarapaceProbeSnapshot
+} from "../index-v9j3cdd6.js";
 import {
   canonicalJson,
-  cloneJson,
+  createCoverageCatalogSnapshot,
   err,
-  freezeJson,
   isRecord,
   ok,
   parseAndCloneWorld,
+  parseCoverageCatalogSnapshot,
   parseJsonValue,
   renderUnknownReason
-} from "../index-nv4eqpe5.js";
+} from "../index-xpkabpf3.js";
 
 // src/testing/activity.ts
 function storeErrorMessage(cause) {
@@ -27,6 +36,15 @@ function operationError(reason) {
     reason
   });
 }
+function closedScopeError() {
+  return Object.freeze({
+    code: "scope-closed",
+    message: "The Carapace activity scope is closed",
+    operation: null,
+    storeError: null,
+    reason: null
+  });
+}
 function storeError(code, operation, cause) {
   return Object.freeze({
     code,
@@ -36,18 +54,28 @@ function storeError(code, operation, cause) {
     reason: null
   });
 }
-function createCarapaceActivityScope(store, runtime) {
+function createCarapaceActivityScope(store, runtime, options = {}) {
+  const signal = options.signal;
+  const isClosed = () => signal?.aborted === true;
   const begin = (namespace = "activity") => {
+    if (isClosed())
+      return err(closedScopeError());
     let operation;
     try {
       operation = runtime.nextOperationId(namespace);
     } catch (reason) {
       return err(operationError(reason));
     }
+    if (isClosed())
+      return err(closedScopeError());
     const currentGeneration = store.getSnapshot().generation;
     const started = store.beginActivity(currentGeneration, operation);
     if (!started.ok) {
       return err(storeError("store-begin-failed", operation, started.error));
+    }
+    if (isClosed()) {
+      const settled = started.value.settle();
+      return settled.ok ? err(closedScopeError()) : err(storeError("store-settle-failed", operation, settled.error));
     }
     let released = false;
     let releaseResult = null;
@@ -117,216 +145,75 @@ function createCarapaceActivityScope(store, runtime) {
   };
   return Object.freeze({ begin, run });
 }
-// src/testing/probe.ts
-var CARAPACE_PROBE_SCHEMA = "carapace.probe/v1";
-var MAX_CARAPACE_PROBE_COUNTERS = 128;
-var COUNTER_NAME_PATTERN = /^[a-z][A-Za-z0-9]*(?:[.-][A-Za-z0-9]+)*$/u;
-var SNAPSHOT_KEYS = new Set([
-  "schema",
-  "activationHash",
-  "generation",
-  "revision",
-  "activity",
-  "pending",
-  "violations",
-  "remainingWork",
-  "isQuiescent"
-]);
-var ACTIVITY_KEYS = new Set(["active", "started", "settled"]);
-function probeError(code, message, counter = null) {
-  return Object.freeze({ code, message, counter });
-}
-function validActivationHash(value) {
-  if (value.length === 0 || value.length > 256)
+// src/testing/coverage-binding.ts
+function sameEntry(actual, expected) {
+  if (actual.key !== expected.key || actual.mode !== expected.mode || actual.claim !== expected.claim || actual.scenarios.length !== expected.scenarios.length)
     return false;
-  for (const character of value) {
-    const code = character.charCodeAt(0);
-    if (code < 32 || code === 127)
-      return false;
-  }
-  return true;
+  return actual.scenarios.every((scenario, index) => scenario === expected.scenarios[index]);
 }
-function readNonNegativeInteger(input) {
-  return typeof input === "number" && Number.isSafeInteger(input) && input >= 0 ? input : null;
-}
-function parseSnapshotCounters(input, category) {
-  if (!isRecord(input)) {
-    return err(probeError("invalid-snapshot", `Probe ${category} counters must be an object`));
+function parseExpectedCoverageCatalogSnapshot(input, expected) {
+  const parsed = parseCoverageCatalogSnapshot(input);
+  if (!parsed.ok) {
+    return err(Object.freeze({
+      code: "invalid-coverage",
+      message: parsed.error.message,
+      coverageError: parsed.error
+    }));
   }
-  const output = Object.create(null);
-  for (const [name, candidate] of Object.entries(input)) {
-    if (name.length > 80 || !COUNTER_NAME_PATTERN.test(name)) {
-      return err(probeError("invalid-counter-name", "Counter names must be 1-80 ASCII alphanumeric characters with optional dots or hyphens", name));
-    }
-    const value = readNonNegativeInteger(candidate);
-    if (value === null) {
-      return err(probeError("invalid-counter", `Counter ${name} must be a non-negative safe integer`, name));
-    }
-    output[name] = value;
-  }
-  return ok(Object.freeze(output));
-}
-function parseCarapaceProbeSnapshot(input) {
-  const parsed = parseJsonValue(input);
-  if (!parsed.ok || !isRecord(parsed.value)) {
-    return err(probeError("invalid-snapshot", parsed.ok ? "Carapace probe snapshot must be an object" : parsed.error.message));
-  }
-  const record = parsed.value;
-  for (const key of Object.keys(record)) {
-    if (!SNAPSHOT_KEYS.has(key)) {
-      return err(probeError("invalid-snapshot", `Unknown Carapace probe snapshot key: ${key}`));
-    }
-  }
-  if (record.schema !== CARAPACE_PROBE_SCHEMA) {
-    return err(probeError("invalid-snapshot", `Carapace probe schema must be ${CARAPACE_PROBE_SCHEMA}`));
-  }
-  if (typeof record.activationHash !== "string" || !validActivationHash(record.activationHash)) {
-    return err(probeError("invalid-activation-hash", "Carapace probe activation hash is invalid"));
-  }
-  const generation = readNonNegativeInteger(record.generation);
-  const revision = readNonNegativeInteger(record.revision);
-  if (generation === null || generation < 1 || revision === null) {
-    return err(probeError("invalid-snapshot", "Carapace probe generation must be positive and revision must be non-negative"));
-  }
-  if (!isRecord(record.activity)) {
-    return err(probeError("invalid-snapshot", "Carapace probe activity must be an object"));
-  }
-  for (const key of Object.keys(record.activity)) {
-    if (!ACTIVITY_KEYS.has(key)) {
-      return err(probeError("invalid-snapshot", `Unknown Carapace activity key: ${key}`));
-    }
-  }
-  const active = readNonNegativeInteger(record.activity.active);
-  const started = readNonNegativeInteger(record.activity.started);
-  const settled = readNonNegativeInteger(record.activity.settled);
-  if (active === null || started === null || settled === null || settled > started || active !== started - settled) {
-    return err(probeError("invalid-snapshot", "Carapace activity counters must be non-negative and conserve started work"));
-  }
-  const pending = parseSnapshotCounters(record.pending, "pending");
-  if (!pending.ok)
-    return pending;
-  const violations = parseSnapshotCounters(record.violations, "violation");
-  if (!violations.ok)
-    return violations;
-  if (Object.keys(pending.value).length + Object.keys(violations.value).length > MAX_CARAPACE_PROBE_COUNTERS) {
-    return err(probeError("too-many-counters", `A probe supports at most ${String(MAX_CARAPACE_PROBE_COUNTERS)} counters`));
-  }
-  if (record.remainingWork === undefined) {
-    return err(probeError("invalid-snapshot", "Carapace probe snapshot requires remainingWork"));
-  }
-  if (typeof record.isQuiescent !== "boolean") {
-    return err(probeError("invalid-snapshot", "Carapace probe isQuiescent must be boolean"));
-  }
-  const expectedQuiescence = active === 0 && Object.values(pending.value).every((value) => value === 0);
-  if (record.isQuiescent !== expectedQuiescence) {
-    return err(probeError("invalid-snapshot", "Carapace probe isQuiescent does not match its activity and pending counters"));
-  }
-  return ok(Object.freeze({
-    schema: CARAPACE_PROBE_SCHEMA,
-    activationHash: record.activationHash,
-    generation,
-    revision,
-    activity: Object.freeze({ active, started, settled }),
-    pending: pending.value,
-    violations: violations.value,
-    remainingWork: freezeJson(record.remainingWork),
-    isQuiescent: record.isQuiescent
-  }));
-}
-function prepareCounters(pending, violations) {
-  if (pending.length + violations.length > MAX_CARAPACE_PROBE_COUNTERS) {
-    return err(probeError("too-many-counters", `A probe supports at most ${String(MAX_CARAPACE_PROBE_COUNTERS)} counters`));
-  }
-  const prepared = [];
-  const seen = new Set;
-  for (const [category, sources] of [
-    ["pending", pending],
-    ["violation", violations]
-  ]) {
-    for (const source of sources) {
-      if (source.name.length > 80 || !COUNTER_NAME_PATTERN.test(source.name)) {
-        return err(probeError("invalid-counter-name", "Counter names must be 1-80 ASCII alphanumeric characters with optional dots or hyphens", source.name));
-      }
-      const key = `${category}:${source.name}`;
-      if (seen.has(key)) {
-        return err(probeError("duplicate-counter", `Duplicate ${category} counter: ${source.name}`, source.name));
-      }
-      seen.add(key);
-      prepared.push(Object.freeze({ ...source, category }));
-    }
-  }
-  prepared.sort((left, right) => {
-    const leftKey = `${left.category}:${left.name}`;
-    const rightKey = `${right.category}:${right.name}`;
-    return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
-  });
-  return ok(Object.freeze(prepared));
-}
-function readCounters(sources) {
-  const pending = Object.create(null);
-  const violations = Object.create(null);
-  for (const source of sources) {
-    let value;
-    try {
-      value = source.read();
-    } catch (reason) {
-      return err(probeError("probe-read-failed", renderUnknownReason(reason, `Failed to read ${source.name}`), source.name));
-    }
-    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
-      return err(probeError("invalid-counter", `Counter ${source.name} must be a non-negative safe integer`, source.name));
-    }
-    (source.category === "pending" ? pending : violations)[source.name] = value;
-  }
-  return ok({ pending: Object.freeze(pending), violations: Object.freeze(violations) });
-}
-function readRemaining(read) {
-  let candidate;
   try {
-    candidate = read();
-  } catch (reason) {
-    return err(probeError("probe-read-failed", renderUnknownReason(reason, "Failed to read remaining work")));
-  }
-  const cloned = cloneJson(candidate);
-  return cloned.ok ? ok(freezeJson(cloned.value)) : err(probeError("invalid-remaining-work", cloned.error.message));
-}
-function createCarapaceProbe(options) {
-  if (!validActivationHash(options.activationHash)) {
-    return err(probeError("invalid-activation-hash", "Activation hashes must be 1-256 characters without control characters"));
-  }
-  const counters = prepareCounters(options.pending ?? [], options.violations ?? []);
-  if (!counters.ok)
-    return counters;
-  const readRemainingWork = options.readRemainingWork ?? (() => Object.freeze({}));
-  const snapshot = () => {
-    const read = readCounters(counters.value);
-    if (!read.ok)
-      return read;
-    const remaining = readRemaining(readRemainingWork);
-    if (!remaining.ok)
-      return remaining;
-    const storeSnapshot = options.store.getSnapshot();
-    const isQuiescent = storeSnapshot.activity.active === 0 && Object.values(read.value.pending).every((value2) => value2 === 0);
-    const value = {
-      schema: CARAPACE_PROBE_SCHEMA,
-      activationHash: options.activationHash,
-      generation: Number(storeSnapshot.generation),
-      revision: storeSnapshot.revision,
-      activity: storeSnapshot.activity,
-      pending: read.value.pending,
-      violations: read.value.violations,
-      remainingWork: remaining.value,
-      isQuiescent
-    };
-    return ok(Object.freeze(value));
-  };
-  const probe = {
-    snapshot,
-    isQuiescent: () => {
-      const current = snapshot();
-      return current.ok ? ok(current.value.isQuiescent) : current;
+    if (parsed.value.schema !== expected.schema || parsed.value.entries.length !== expected.entries.length || parsed.value.entries.some((entry, index) => {
+      const expectedEntry = expected.entries[index];
+      return expectedEntry === undefined || !sameEntry(entry, expectedEntry);
+    })) {
+      return err(Object.freeze({
+        code: "coverage-mismatch",
+        message: "Published Carapace coverage does not exactly match the authored definition",
+        coverageError: null
+      }));
     }
-  };
-  return ok(Object.freeze(probe));
+  } catch (reason) {
+    return err(Object.freeze({
+      code: "invalid-definition",
+      message: renderUnknownReason(reason, "Expected Carapace coverage could not be inspected"),
+      coverageError: null
+    }));
+  }
+  return ok(expected);
+}
+function parseDefinitionCoverageSnapshot(input, definition) {
+  let expected;
+  try {
+    expected = createCoverageCatalogSnapshot(definition.coverage);
+  } catch (reason) {
+    return err(Object.freeze({
+      code: "invalid-definition",
+      message: renderUnknownReason(reason, "Carapace definition coverage could not be inspected"),
+      coverageError: null
+    }));
+  }
+  return parseExpectedCoverageCatalogSnapshot(input, expected);
+}
+// src/testing/evidence.ts
+function classifyCoverageEvidence(entry, facts) {
+  const directVerified = facts.directEvidence === "verified";
+  if (entry.mode === "direct") {
+    return directVerified ? "verified" : "direct-required";
+  }
+  let exercised = 0;
+  for (const scenario of entry.scenarios) {
+    if (facts.exercisedScenarios.has(scenario))
+      exercised += 1;
+  }
+  if (exercised === 0) {
+    return directVerified && entry.mode === "mixed" ? "partial" : "not-exercised";
+  }
+  if (exercised < entry.scenarios.length) {
+    return "partial";
+  }
+  if (entry.mode === "fixture") {
+    return "verified";
+  }
+  return directVerified ? "verified" : "fixture-verified";
 }
 // src/testing/session.ts
 function frozenMessages(messages) {
@@ -335,12 +222,39 @@ function frozenMessages(messages) {
 function isPromiseLike(value) {
   return (typeof value === "object" && value !== null || typeof value === "function") && typeof Reflect.get(value, "then") === "function";
 }
+function freezeCounterSources(sources) {
+  return Object.freeze([...sources]);
+}
+function prepareSessionObservation(input) {
+  const candidate = input;
+  if (!isRecord(candidate)) {
+    throw new Error("Carapace observation must be an object");
+  }
+  const pending = input.pending;
+  const violations = input.violations;
+  const readRemainingWork = input.readRemainingWork;
+  if (pending !== undefined && !Array.isArray(pending)) {
+    throw new Error("Carapace observation pending counters must be an array");
+  }
+  if (violations !== undefined && !Array.isArray(violations)) {
+    throw new Error("Carapace observation violation counters must be an array");
+  }
+  if (readRemainingWork !== undefined && typeof readRemainingWork !== "function") {
+    throw new Error("Carapace observation remaining-work reader must be a function");
+  }
+  return Object.freeze({
+    ...pending === undefined ? {} : { pending: freezeCounterSources(pending) },
+    ...violations === undefined ? {} : { violations: freezeCounterSources(violations) },
+    ...readRemainingWork === undefined ? {} : { readRemainingWork }
+  });
+}
 function sessionError(error, cleanupErrors = []) {
   const failures = frozenMessages(cleanupErrors);
   switch (error.code) {
+    case "invalid-options":
     case "activation-failed":
     case "store-failed":
-    case "product-failed":
+    case "harness-failed":
     case "observation-failed":
     case "probe-failed":
       return Object.freeze({ ...error, cleanupErrors: failures });
@@ -379,17 +293,102 @@ function activateSession(definition, activation) {
   }
 }
 function createCarapaceSession(options) {
-  const activation = activateSession(options.definition, options.activation);
-  if (!activation.ok) {
+  let definition;
+  let requestedActivation;
+  let createHarness;
+  let observeHarness;
+  let parseWorld;
+  let coverage;
+  let sleep;
+  let storeOptions;
+  try {
+    definition = options.definition;
+    parseWorld = definition.parseWorld;
+    coverage = createCoverageCatalogSnapshot(definition.coverage);
+    const activationInput = options.activation;
+    if (activationInput.kind === "query") {
+      requestedActivation = Object.freeze({ kind: "query", source: activationInput.source });
+    } else if (activationInput.kind === "scenario") {
+      requestedActivation = Object.freeze({ kind: "scenario", scenario: activationInput.scenario });
+    } else {
+      throw new Error("Carapace session activation kind must be query or scenario");
+    }
+    createHarness = options.create;
+    observeHarness = options.observe;
+    sleep = options.sleep;
+    const storeOptionsInput = options.storeOptions;
+    if (storeOptionsInput === undefined) {
+      storeOptions = undefined;
+    } else {
+      const onListenerError = storeOptionsInput.onListenerError;
+      storeOptions = Object.freeze({
+        ...onListenerError === undefined ? {} : { onListenerError }
+      });
+    }
+  } catch (reason) {
     return err(sessionError({
-      code: "activation-failed",
-      message: activation.error.message,
-      queryError: activation.error,
+      code: "invalid-options",
+      message: renderUnknownReason(reason, "Carapace session options could not be inspected"),
+      queryError: null,
       storeError: null,
       probeError: null
     }));
   }
-  const store = options.storeOptions === undefined ? createCarapaceStore(activation.value.world, options.definition.parseWorld) : createCarapaceStore(activation.value.world, options.definition.parseWorld, options.storeOptions);
+  let activationSource;
+  let activationScenario;
+  let activationRoute;
+  let activationWorld;
+  let activationRuntime;
+  let activationHash;
+  try {
+    const activated = activateSession(definition, requestedActivation);
+    if (!activated.ok) {
+      const queryError = Object.freeze({
+        code: activated.error.code,
+        message: activated.error.message
+      });
+      return err(sessionError({
+        code: "activation-failed",
+        message: queryError.message,
+        queryError,
+        storeError: null,
+        probeError: null
+      }));
+    }
+    const candidate = activated.value;
+    if (candidate.kind !== "active")
+      throw new Error("Carapace activation kind must be active");
+    if (candidate.source !== "scenario" && candidate.source !== "fixture") {
+      throw new Error("Carapace activation source must be scenario or fixture");
+    }
+    if (typeof candidate.scenario !== "string") {
+      throw new Error("Carapace activation scenario must be a string");
+    }
+    if (typeof candidate.route !== "string") {
+      throw new Error("Carapace activation route must be a string");
+    }
+    if (typeof candidate.activationHash !== "string" || candidate.activationHash.length === 0) {
+      throw new Error("Carapace activation hash must be a non-empty string");
+    }
+    const parsedRuntime = parseLogicalRuntimeSnapshot(candidate.runtime);
+    if (!parsedRuntime.ok)
+      throw new Error(parsedRuntime.error.message);
+    activationSource = candidate.source;
+    activationScenario = candidate.scenario;
+    activationRoute = candidate.route;
+    activationWorld = candidate.world;
+    activationRuntime = parsedRuntime.value;
+    activationHash = candidate.activationHash;
+  } catch (reason) {
+    return err(sessionError({
+      code: "invalid-options",
+      message: renderUnknownReason(reason, "Carapace session activation failed unexpectedly"),
+      queryError: null,
+      storeError: null,
+      probeError: null
+    }));
+  }
+  const store = storeOptions === undefined ? createCarapaceStore(activationWorld, parseWorld) : createCarapaceStore(activationWorld, parseWorld, storeOptions);
   if (!store.ok) {
     return err(sessionError({
       code: "store-failed",
@@ -399,14 +398,23 @@ function createCarapaceSession(options) {
       probeError: null
     }));
   }
-  const clock = options.sleep === undefined ? createLogicalRuntime(activation.value.runtime) : createLogicalRuntime(activation.value.runtime, options.sleep);
-  const activity = createCarapaceActivityScope(store.value, clock);
+  const clock = sleep === undefined ? createLogicalRuntime(activationRuntime) : createLogicalRuntime(activationRuntime, sleep);
+  const activation = Object.freeze({
+    kind: "active",
+    source: activationSource,
+    scenario: activationScenario,
+    route: activationRoute,
+    world: store.value.getSnapshot().world,
+    runtime: clock.snapshot(),
+    activationHash
+  });
   const controller = new AbortController;
+  const activity = createCarapaceActivityScope(store.value, clock, { signal: controller.signal });
   const cleanups = [];
   let registrationOpen = true;
   const context = Object.freeze({
-    activation: activation.value,
-    world: activation.value.world,
+    activation,
+    world: activation.world,
     store: store.value,
     clock,
     activity,
@@ -416,23 +424,24 @@ function createCarapaceSession(options) {
         throw new Error("Carapace cleanup must be registered during synchronous session construction");
       }
       cleanups.push(cleanup);
+      return;
     }
   });
-  let product;
+  let harness;
   try {
-    product = options.create(context);
-    if (isPromiseLike(product)) {
-      Promise.resolve(product).catch(() => {
+    harness = createHarness(context);
+    if (isPromiseLike(harness)) {
+      Promise.resolve(harness).catch(() => {
         return;
       });
-      throw new Error("Carapace product construction must complete synchronously");
+      throw new Error("Carapace harness construction must complete synchronously");
     }
   } catch (reason) {
     registrationOpen = false;
     const cleanupErrors = runCleanup(controller, cleanups);
     return err(sessionError({
-      code: "product-failed",
-      message: renderUnknownReason(reason, "Carapace product construction failed"),
+      code: "harness-failed",
+      message: renderUnknownReason(reason, "Carapace harness construction failed"),
       queryError: null,
       storeError: null,
       probeError: null
@@ -440,14 +449,14 @@ function createCarapaceSession(options) {
   }
   let observation;
   try {
-    const observed = options.observe?.(product, context) ?? Object.freeze({});
+    const observed = observeHarness === undefined ? Object.freeze({}) : observeHarness(harness, context);
     if (isPromiseLike(observed)) {
       Promise.resolve(observed).catch(() => {
         return;
       });
       throw new Error("Carapace observation construction must complete synchronously");
     }
-    observation = observed;
+    observation = prepareSessionObservation(observed);
   } catch (reason) {
     registrationOpen = false;
     const cleanupErrors = runCleanup(controller, cleanups);
@@ -462,7 +471,7 @@ function createCarapaceSession(options) {
   registrationOpen = false;
   const probe = createCarapaceProbe({
     store: store.value,
-    activationHash: activation.value.activationHash,
+    activationHash: activation.activationHash,
     ...observation.pending === undefined ? {} : { pending: observation.pending },
     ...observation.violations === undefined ? {} : { violations: observation.violations },
     ...observation.readRemainingWork === undefined ? {} : { readRemainingWork: observation.readRemainingWork }
@@ -479,21 +488,40 @@ function createCarapaceSession(options) {
   }
   let disposed = false;
   let disposalErrors = Object.freeze([]);
+  const onDispose = (cleanup) => {
+    if (typeof cleanup !== "function") {
+      return err(Object.freeze({
+        code: "invalid-cleanup",
+        message: "Carapace cleanup must be a function"
+      }));
+    }
+    if (disposed) {
+      return err(Object.freeze({
+        code: "session-disposed",
+        message: "Cannot register cleanup on a disposed Carapace session"
+      }));
+    }
+    cleanups.push(cleanup);
+    return ok(true);
+  };
   const dispose = () => {
     if (disposed)
       return;
     disposed = true;
     disposalErrors = runCleanup(controller, cleanups);
+    return;
   };
   return ok(Object.freeze({
-    activation: activation.value,
-    world: activation.value.world,
+    activation,
+    world: activation.world,
     store: store.value,
     clock,
     activity,
-    product,
+    harness,
     probe: probe.value,
+    coverage,
     signal: controller.signal,
+    onDispose,
     dispose,
     isDisposed: () => disposed,
     disposalErrors: () => disposalErrors
@@ -668,11 +696,46 @@ function transportError(code, message, step, expectedRequest, actualRequest, rem
 function runtimeFailureMessage(error) {
   return `Logical wait failed: ${renderUnknownReason(error, "Unknown logical runtime failure")}`;
 }
+function isPromiseLike2(value) {
+  return (typeof value === "object" && value !== null || typeof value === "function") && typeof Reflect.get(value, "then") === "function";
+}
+function synchronousReturnViolation(value, label) {
+  if (value === undefined)
+    return null;
+  if (isPromiseLike2(value)) {
+    Promise.resolve(value).catch(() => {
+      return;
+    });
+  }
+  return new Error(`${label} must complete synchronously and return undefined`);
+}
 function createExactScriptedTransport(options) {
-  const limits = validateLimits(options.limits ?? DEFAULT_SCRIPTED_TRANSPORT_LIMITS);
+  let captured;
+  try {
+    captured = Object.freeze({
+      wait: options.runtime.wait,
+      parseRequest: options.parseRequest,
+      parseResponse: options.parseResponse,
+      parseEvent: options.parseEvent,
+      parseFailure: options.parseFailure,
+      steps: options.steps,
+      beginActivity: options.activity?.begin,
+      activityNamespace: options.activityNamespace ?? "transport",
+      limits: options.limits ?? DEFAULT_SCRIPTED_TRANSPORT_LIMITS,
+      onListenerError: options.onListenerError
+    });
+  } catch (reason) {
+    return err(definitionError("invalid-options", renderUnknownReason(reason, "Scripted transport options could not be inspected")));
+  }
+  let limits;
+  try {
+    limits = validateLimits(captured.limits);
+  } catch (reason) {
+    return err(definitionError("invalid-options", renderUnknownReason(reason, "Scripted transport limits could not be inspected")));
+  }
   if (!limits.ok)
     return limits;
-  const parsedSteps = parseSteps(options, limits.value);
+  const parsedSteps = parseSteps(captured, limits.value);
   if (!parsedSteps.ok)
     return parsedSteps;
   const listeners = new Set;
@@ -700,6 +763,18 @@ function createExactScriptedTransport(options) {
     for (const resolve of waiting)
       resolve();
   };
+  const reportListenerError = (reason) => {
+    if (captured.onListenerError === undefined)
+      return;
+    try {
+      const returned = captured.onListenerError(reason);
+      const violation = synchronousReturnViolation(returned, "Scripted transport listener-error reporters");
+      if (violation !== null)
+        recordInternalError(violation);
+    } catch (reporterReason) {
+      recordInternalError(reporterReason);
+    }
+  };
   const emit = (events) => {
     if (disposed)
       return false;
@@ -710,14 +785,15 @@ function createExactScriptedTransport(options) {
         if (disposed)
           return false;
         try {
-          listener(event);
+          const returned = listener(event);
+          const violation = synchronousReturnViolation(returned, "Scripted transport listeners");
+          if (violation !== null) {
+            recordInternalError(violation);
+            reportListenerError(violation);
+          }
         } catch (reason) {
           recordInternalError(reason);
-          try {
-            options.onListenerError?.(reason);
-          } catch (reporterReason) {
-            recordInternalError(reporterReason);
-          }
+          reportListenerError(reason);
         }
       }
     }
@@ -742,10 +818,10 @@ function createExactScriptedTransport(options) {
     }
   };
   const beginLease = () => {
-    if (options.activity === undefined)
+    if (captured.beginActivity === undefined)
       return ok(null);
     try {
-      const started = options.activity.begin(options.activityNamespace ?? "transport");
+      const started = captured.beginActivity(captured.activityNamespace);
       return started.ok ? ok(started.value) : err(renderUnknownReason(started.error, "Activity scope failed"));
     } catch (reason) {
       return err(renderUnknownReason(reason, "Activity scope threw"));
@@ -778,11 +854,12 @@ function createExactScriptedTransport(options) {
       recordInternalError(reason);
     }
     notifyIdle();
+    return;
   };
   const request = (input) => {
     if (disposed)
       return Promise.resolve(disposedFailure());
-    const parsedRequest = parseAndCloneWorld(input, options.parseRequest);
+    const parsedRequest = parseAndCloneWorld(input, captured.parseRequest);
     if (!parsedRequest.ok) {
       if (disposed)
         return Promise.resolve(disposedFailure());
@@ -875,7 +952,7 @@ function createExactScriptedTransport(options) {
         }
         let waited;
         try {
-          waited = await options.runtime.wait(step.delayMs, disposalController.signal);
+          waited = await captured.wait(step.delayMs, disposalController.signal);
         } catch (reason) {
           if (disposed) {
             cancel();
@@ -921,6 +998,7 @@ function createExactScriptedTransport(options) {
           return;
         active = false;
         listeners.delete(listener);
+        return;
       };
     },
     dispose,
@@ -951,12 +1029,21 @@ function createExactScriptedTransport(options) {
   };
   return ok(Object.freeze(transport));
 }
+
+// src/testing/index.ts
+function parseCoverageCatalogSnapshot2(input) {
+  return parseCoverageCatalogSnapshot(input);
+}
 export {
+  parseExpectedCoverageCatalogSnapshot,
+  parseDefinitionCoverageSnapshot,
+  parseCoverageCatalogSnapshot2 as parseCoverageCatalogSnapshot,
   parseCarapaceProbeSnapshot,
   createExactScriptedTransport,
   createCarapaceSession,
   createCarapaceProbe,
   createCarapaceActivityScope,
+  classifyCoverageEvidence,
   MAX_CARAPACE_PROBE_COUNTERS,
   DEFAULT_SCRIPTED_TRANSPORT_LIMITS,
   CARAPACE_PROBE_SCHEMA

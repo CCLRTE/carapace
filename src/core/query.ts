@@ -1,4 +1,8 @@
-import { parseFixtureJson, type FixtureParseOptions } from "./fixture.js";
+import {
+  DEFAULT_MAX_FIXTURE_BYTES,
+  parseFixtureJson,
+  type FixtureParseOptions,
+} from "./fixture.js";
 import { parseScenarioId, type ScenarioId } from "./ids.js";
 import { stableHash, utf8ByteLength } from "./json.js";
 import type { JsonValue } from "./json-value.js";
@@ -8,7 +12,14 @@ import type { ScenarioCatalog } from "./scenario.js";
 
 export const SCENARIO_QUERY_KEY = "__carapace_scenario" as const;
 export const FIXTURE_QUERY_KEY = "__carapace_fixture" as const;
-export const DEFAULT_MAX_QUERY_BYTES = 98_304;
+const FIXTURE_QUERY_PREFIX_BYTES = utf8ByteLength(`?${FIXTURE_QUERY_KEY}=`);
+
+/** Worst-case percent-encoded query bytes for a bounded fixture JSON string. */
+export function maximumFixtureQueryBytes(maxFixtureBytes: number): number {
+  return (maxFixtureBytes * 3) + FIXTURE_QUERY_PREFIX_BYTES;
+}
+
+export const DEFAULT_MAX_QUERY_BYTES = maximumFixtureQueryBytes(DEFAULT_MAX_FIXTURE_BYTES);
 
 export interface ActiveCarapace<World extends JsonValue, Route extends string> {
   readonly kind: "active";
@@ -32,6 +43,7 @@ export type QueryErrorCode =
   | "duplicate-parameter"
   | "invalid-encoding"
   | "invalid-fixture"
+  | "invalid-query"
   | "invalid-scenario"
   | "mismatched-scenario"
   | "oversized-query"
@@ -154,12 +166,15 @@ export function activateCarapaceScenario<World extends JsonValue, Route extends 
 }
 
 export function parseCarapaceQuery<World extends JsonValue, Route extends string>(
-  source: string,
+  source: unknown,
   options: CarapaceQueryOptions<World, Route>,
 ): Result<CarapaceActivation<World, Route>, QueryError> {
   const maxBytes = options.maxQueryBytes ?? DEFAULT_MAX_QUERY_BYTES;
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
     throw new Error("Query maxQueryBytes must be a positive safe integer");
+  }
+  if (typeof source !== "string") {
+    return err(queryError("invalid-query", "Carapace query source must be a string"));
   }
   if (utf8ByteLength(source) > maxBytes) {
     return err(queryError("oversized-query", "Carapace query exceeds its byte limit"));

@@ -2,6 +2,7 @@ import { parseScenarioId, type ScenarioId } from "./ids.js";
 import {
   canonicalJson,
   parseAndCloneWorld,
+  parseExactJsonSource,
   utf8ByteLength,
   type WorldParser,
 } from "./json.js";
@@ -22,6 +23,7 @@ export interface FixtureEnvelope<World extends JsonValue, Route extends string> 
 }
 
 export type FixtureErrorCode =
+  | "duplicate-key"
   | "invalid-fixture"
   | "invalid-json"
   | "invalid-runtime"
@@ -67,11 +69,12 @@ export function parseFixtureEnvelope<World extends JsonValue, Route extends stri
   input: unknown,
   options: FixtureParseOptions<World, Route>,
 ): Result<FixtureEnvelope<World, Route>, FixtureError> {
+  const maximum = maxFixtureBytes(options.maxBytes);
   const serialized = canonicalJson(input);
   if (!serialized.ok) {
     return err(fixtureError("invalid-fixture", serialized.error.message));
   }
-  if (utf8ByteLength(serialized.value) > maxFixtureBytes(options.maxBytes)) {
+  if (utf8ByteLength(serialized.value) > maximum) {
     return err(fixtureError("oversized-fixture", "Fixture exceeds its byte limit"));
   }
   const foreign = JSON.parse(serialized.value) as unknown;
@@ -107,29 +110,41 @@ export function parseFixtureEnvelope<World extends JsonValue, Route extends stri
   if (!world.ok) {
     return err(fixtureError("invalid-world", world.error.message));
   }
-  return ok(Object.freeze({
+  const envelope = Object.freeze({
     schema: FIXTURE_SCHEMA,
     scenario: id.value,
     route: scenario.route,
     world: world.value,
     runtime: runtime.value,
-  }));
+  });
+  const normalized = canonicalJson(envelope);
+  if (!normalized.ok) {
+    return err(fixtureError("invalid-fixture", normalized.error.message));
+  }
+  if (utf8ByteLength(normalized.value) > maximum) {
+    return err(fixtureError("oversized-fixture", "Normalized fixture exceeds its byte limit"));
+  }
+  return ok(envelope);
 }
 
 export function parseFixtureJson<World extends JsonValue, Route extends string>(
-  source: string,
+  source: unknown,
   options: FixtureParseOptions<World, Route>,
 ): Result<FixtureEnvelope<World, Route>, FixtureError> {
+  if (typeof source !== "string") {
+    return err(fixtureError("invalid-json", "Fixture JSON source must be a string"));
+  }
   if (utf8ByteLength(source) > maxFixtureBytes(options.maxBytes)) {
     return err(fixtureError("oversized-fixture", "Fixture exceeds its byte limit"));
   }
-  let input: unknown;
-  try {
-    input = JSON.parse(source) as unknown;
-  } catch {
-    return err(fixtureError("invalid-json", "Fixture is not valid JSON"));
+  const input = parseExactJsonSource(source);
+  if (!input.ok) {
+    return err(fixtureError(
+      input.error.code === "duplicate-key" ? "duplicate-key" : "invalid-json",
+      input.error.code === "duplicate-key" ? input.error.message : "Fixture is not valid JSON",
+    ));
   }
-  return parseFixtureEnvelope(input, options);
+  return parseFixtureEnvelope(input.value, options);
 }
 
 /** Create an exact fixture envelope while deriving its route from the catalog. */
@@ -160,7 +175,11 @@ export function serializeFixtureJson<World extends JsonValue, Route extends stri
   const fixture = createFixtureEnvelope(input, options);
   if (!fixture.ok) return fixture;
   const serialized = canonicalJson(fixture.value);
-  return serialized.ok
-    ? ok(serialized.value)
-    : err(fixtureError("invalid-fixture", serialized.error.message));
+  if (!serialized.ok) {
+    return err(fixtureError("invalid-fixture", serialized.error.message));
+  }
+  if (utf8ByteLength(serialized.value) > maxFixtureBytes(options.maxBytes)) {
+    return err(fixtureError("oversized-fixture", "Normalized fixture exceeds its byte limit"));
+  }
+  return ok(serialized.value);
 }

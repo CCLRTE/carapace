@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import { defineCarapace } from "../core/definition.js";
 import { SCENARIO_QUERY_KEY } from "../core/query.js";
-import { parseTestWorld, type TestRoute, type TestWorld } from "../core/test-support.js";
+import { parseTestWorld } from "../core/test-support.js";
 import {
   createCarapaceSession,
   type CarapaceSessionCleanup,
@@ -10,7 +10,7 @@ import {
 } from "./session.js";
 
 function definition() {
-  const created = defineCarapace<TestWorld, TestRoute>({
+  return defineCarapace({
     parseWorld: parseTestWorld,
     defaultScenario: "chat.empty",
     scenarios: [{
@@ -21,12 +21,10 @@ function definition() {
     }],
     coverage: [],
   });
-  if (!created.ok) throw new Error(created.error.message);
-  return created.value;
 }
 
 describe("Carapace session", () => {
-  test("owns activation, clock, activity, product observation, and teardown", () => {
+  test("owns activation, clock, activity, harness observation, and teardown", () => {
     const cleanup: string[] = [];
     let pending = 1;
     const created = createCarapaceSession({
@@ -46,7 +44,8 @@ describe("Carapace session", () => {
 
     expect(String(created.value.activation.scenario)).toBe("chat.empty");
     expect(created.value.clock.now()).toBe(0);
-    expect(created.value.product).toEqual({ count: 0 });
+    expect(created.value.harness).toEqual({ count: 0 });
+    expect(created.value.coverage).toEqual({ schema: "carapace.coverage/v2", entries: [] });
     expect(created.value.probe.isQuiescent()).toEqual({ ok: true, value: false });
     pending = 0;
     expect(created.value.probe.snapshot()).toMatchObject({
@@ -62,7 +61,7 @@ describe("Carapace session", () => {
     expect(created.value.disposalErrors()).toEqual([]);
   });
 
-  test("does not construct a product after invalid activation", () => {
+  test("does not construct a harness after invalid activation", () => {
     let constructions = 0;
     const created = createCarapaceSession({
       definition: definition(),
@@ -77,7 +76,110 @@ describe("Carapace session", () => {
     expect(constructions).toBe(0);
   });
 
-  test("aborts and unwinds registered cleanup when product construction fails", () => {
+  test("captures store callback configuration before world parsing can mutate it", () => {
+    const reports = { captured: 0, mutated: 0 };
+    const storeOptions = {
+      onListenerError: () => {
+        reports.captured += 1;
+      },
+    };
+    let mutateDuringParse = false;
+    const customDefinition = defineCarapace({
+      parseWorld: (input) => {
+        if (mutateDuringParse) {
+          storeOptions.onListenerError = () => {
+            reports.mutated += 1;
+          };
+        }
+        return parseTestWorld(input);
+      },
+      defaultScenario: "chat.empty",
+      scenarios: [{
+        id: "chat.empty",
+        title: "Empty chat",
+        route: "/chat",
+        world: { count: 0, messages: [] },
+      }],
+      coverage: [],
+    });
+    mutateDuringParse = true;
+    const created = createCarapaceSession({
+      definition: customDefinition,
+      activation: { kind: "scenario", scenario: "chat.empty" },
+      storeOptions,
+      create: () => ({}),
+    });
+    if (!created.ok) throw new Error(created.error.message);
+    created.value.store.subscribe(() => {
+      throw new Error("listener failed");
+    });
+
+    const lease = created.value.activity.begin("reporter-capture");
+    if (!lease.ok) throw new Error(lease.error.message);
+    expect(lease.value.release()).toEqual({ ok: true, value: true });
+    expect(reports).toEqual({ captured: 2, mutated: 0 });
+    created.value.dispose();
+  });
+
+  test("turns hostile session option access into an error Result", () => {
+    const hostileOptions = new Proxy({}, {
+      get: () => {
+        throw new Error("session option getter failed");
+      },
+    });
+    expect(createCarapaceSession(hostileOptions as never)).toMatchObject({
+      ok: false,
+      error: { code: "invalid-options", message: "session option getter failed" },
+    });
+    const unsupportedActivation = {
+      kind: "unsupported",
+    };
+    const invalidActivationOptions = {
+      definition: definition(),
+      activation: unsupportedActivation,
+      create: () => ({}),
+    };
+    expect(createCarapaceSession(invalidActivationOptions as never)).toMatchObject({
+      ok: false,
+      error: { code: "invalid-options", message: "Carapace session activation kind must be query or scenario" },
+    });
+  });
+
+  test("contains hostile structural definition activation behind the Result boundary", () => {
+    const throwingDefinition = {
+      ...definition(),
+      activateScenario: () => {
+        throw new Error("structural activation failed");
+      },
+    };
+    expect(createCarapaceSession({
+      definition: throwingDefinition,
+      activation: { kind: "scenario", scenario: "chat.empty" },
+      create: () => ({}),
+    })).toMatchObject({
+      ok: false,
+      error: { code: "invalid-options", message: "structural activation failed" },
+    });
+
+    const hostileResultDefinition = {
+      ...definition(),
+      activate: () => new Proxy({}, {
+        get: () => {
+          throw new Error("structural activation result failed");
+        },
+      }),
+    };
+    expect(createCarapaceSession({
+      definition: hostileResultDefinition as never,
+      activation: { kind: "query", source: "" },
+      create: () => ({}),
+    })).toMatchObject({
+      ok: false,
+      error: { code: "invalid-options", message: "structural activation result failed" },
+    });
+  });
+
+  test("aborts and unwinds registered cleanup when harness construction fails", () => {
     const cleanup: string[] = [];
     let aborted = false;
     const created = createCarapaceSession({
@@ -92,10 +194,71 @@ describe("Carapace session", () => {
     });
     expect(created).toMatchObject({
       ok: false,
-      error: { code: "product-failed", message: "adapter unavailable", cleanupErrors: [] },
+      error: { code: "harness-failed", message: "adapter unavailable", cleanupErrors: [] },
     });
     expect(aborted).toBeTrue();
     expect(cleanup).toEqual(["cleaned"]);
+  });
+
+  test("turns hostile observation values into Results and always unwinds construction", () => {
+    const revoked = Proxy.revocable({}, {});
+    revoked.revoke();
+    const cases: readonly [label: string, observe: () => CarapaceSessionObservation][] = [
+      ["null", () => null as unknown as CarapaceSessionObservation],
+      ["revoked proxy", () => revoked.proxy],
+      ["throwing accessor", () => Object.defineProperty({}, "pending", {
+        get: () => {
+          throw new Error("pending getter failed");
+        },
+      })],
+    ];
+
+    for (const [label, observe] of cases) {
+      const lifecycle = { aborted: false, cleanups: 0 };
+      const created = createCarapaceSession({
+        definition: definition(),
+        activation: { kind: "scenario", scenario: "chat.empty" },
+        create: (context) => {
+          context.signal.addEventListener("abort", () => { lifecycle.aborted = true; }, { once: true });
+          context.onDispose(() => {
+            lifecycle.cleanups += 1;
+            return undefined;
+          });
+          return {};
+        },
+        observe,
+      });
+
+      if (created.ok) {
+        created.value.dispose();
+        throw new Error(`${label} observation unexpectedly constructed a session`);
+      }
+      expect(created.error.code).toBe("observation-failed");
+      expect(lifecycle).toEqual({ aborted: true, cleanups: 1 });
+    }
+  });
+
+  test("unwinds construction when observation counters cannot form a probe", () => {
+    const lifecycle = { aborted: false, cleanups: 0 };
+    const created = createCarapaceSession({
+      definition: definition(),
+      activation: { kind: "scenario", scenario: "chat.empty" },
+      create: (context) => {
+        context.signal.addEventListener("abort", () => { lifecycle.aborted = true; }, { once: true });
+        context.onDispose(() => {
+          lifecycle.cleanups += 1;
+          return undefined;
+        });
+        return {};
+      },
+      observe: () => ({ pending: [{ name: "invalid counter", read: () => 0 }] }),
+    });
+
+    expect(created).toMatchObject({
+      ok: false,
+      error: { code: "probe-failed", probeError: { code: "invalid-counter-name" } },
+    });
+    expect(lifecycle).toEqual({ aborted: true, cleanups: 1 });
   });
 
   test("records cleanup failures while still running every callback", () => {
@@ -116,6 +279,69 @@ describe("Carapace session", () => {
     expect(created.value.disposalErrors()).toEqual(["cleanup failed"]);
   });
 
+  test("accepts post-construction cleanup until disposal and then fails closed", () => {
+    const cleanup: string[] = [];
+    const created = createCarapaceSession({
+      definition: definition(),
+      activation: { kind: "scenario", scenario: "chat.empty" },
+      create: () => ({}),
+    });
+    if (!created.ok) throw new Error(created.error.message);
+    expect(created.value.onDispose(() => {
+      cleanup.push("browser");
+      return undefined;
+    })).toEqual({ ok: true, value: true });
+    expect(created.value.onDispose(null as never)).toMatchObject({
+      ok: false,
+      error: { code: "invalid-cleanup" },
+    });
+
+    created.value.dispose();
+    expect(cleanup).toEqual(["browser"]);
+    expect(created.value.onDispose(() => undefined)).toMatchObject({
+      ok: false,
+      error: { code: "session-disposed" },
+    });
+  });
+
+  test("fences session-owned activity before reentrant cleanup and after disposal", () => {
+    const duringCleanup: unknown[] = [];
+    const created = createCarapaceSession({
+      definition: definition(),
+      activation: { kind: "scenario", scenario: "chat.empty" },
+      create: (context) => {
+        const beforeDisposal = context.activity.begin("before-disposal");
+        if (!beforeDisposal.ok) throw new Error(beforeDisposal.error.message);
+        context.onDispose(() => {
+          expect(beforeDisposal.value.release()).toEqual({ ok: true, value: true });
+          duringCleanup.push(context.activity.begin("during-cleanup"));
+          return undefined;
+        });
+        return {};
+      },
+    });
+    if (!created.ok) throw new Error(created.error.message);
+    expect(created.value.store.getSnapshot().activity).toEqual({ active: 1, started: 1, settled: 0 });
+
+    created.value.dispose();
+    expect(duringCleanup).toEqual([{
+      ok: false,
+      error: {
+        code: "scope-closed",
+        message: "The Carapace activity scope is closed",
+        operation: null,
+        storeError: null,
+        reason: null,
+      },
+    }]);
+    expect(created.value.activity.begin("after-disposal")).toMatchObject({
+      ok: false,
+      error: { code: "scope-closed", operation: null },
+    });
+    expect(created.value.store.getSnapshot().activity).toEqual({ active: 0, started: 1, settled: 1 });
+    expect(created.value.probe.isQuiescent()).toEqual({ ok: true, value: true });
+  });
+
   test("supports programmatic scenario activation without an observation adapter", () => {
     const created = createCarapaceSession({
       definition: definition(),
@@ -124,7 +350,7 @@ describe("Carapace session", () => {
     });
     if (!created.ok) throw new Error(created.error.message);
 
-    expect(created.value.product).toEqual({ route: "/chat" });
+    expect(created.value.harness).toEqual({ route: "/chat" });
     expect(created.value.probe.snapshot()).toMatchObject({
       ok: true,
       value: { isQuiescent: true },
@@ -140,8 +366,8 @@ describe("Carapace session", () => {
     expect(product).toMatchObject({
       ok: false,
       error: {
-        code: "product-failed",
-        message: "Carapace product construction must complete synchronously",
+        code: "harness-failed",
+        message: "Carapace harness construction must complete synchronously",
       },
     });
 

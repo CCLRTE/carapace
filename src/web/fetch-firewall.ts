@@ -7,11 +7,48 @@ export interface CarapaceFetchFirewallOptions {
 
 type FetchCall = (...arguments_: Parameters<typeof fetch>) => ReturnType<typeof fetch>;
 
-let uninstallActiveFirewall: (() => void) | null = null;
+export type CarapaceFetchFirewallUninstall = () => undefined;
 
-function requestUrl(input: Parameters<typeof fetch>[0]): URL | null {
+export interface PreparedCarapaceFetchFirewallInstallation {
+  readonly commit: () => undefined;
+  readonly rollback: () => undefined;
+  readonly uninstall: CarapaceFetchFirewallUninstall;
+}
+
+interface ActiveFetchFirewallInstallation {
+  readonly guardedFetch: typeof fetch;
+  readonly restoreFetch: typeof fetch;
+  readonly deactivate: CarapaceFetchFirewallUninstall;
+  readonly uninstall: CarapaceFetchFirewallUninstall;
+}
+
+interface ActivityBoundary {
+  readonly valid: boolean;
+  readonly release: () => undefined;
+}
+
+let activeFirewallInstallation: ActiveFetchFirewallInstallation | null = null;
+
+function containPromiseLike(value: unknown): boolean {
+  if ((typeof value !== "object" || value === null) && typeof value !== "function") return false;
+  let then: unknown;
   try {
-    if (input instanceof Request) return new URL(input.url);
+    then = Reflect.get(value, "then");
+  } catch {
+    return false;
+  }
+  if (typeof then !== "function") return false;
+  try {
+    void Promise.resolve(value).catch(() => undefined);
+  } catch {
+    // Promise assimilation is foreign code. Treat it as contained and invalid.
+  }
+  return true;
+}
+
+function requestUrl(input: unknown): URL | null {
+  try {
+    if (typeof Request !== "undefined" && input instanceof Request) return new URL(input.url);
     const browserGlobal = globalThis as typeof globalThis & { readonly location?: { readonly origin?: string } };
     const locationOrigin = browserGlobal.location?.origin;
     const base = locationOrigin === undefined || locationOrigin === "null"
@@ -23,47 +60,192 @@ function requestUrl(input: Parameters<typeof fetch>[0]): URL | null {
   }
 }
 
-/** Install one process-local, fail-closed fetch boundary for a browser Carapace frame. */
-export function installCarapaceFetchFirewall(
+function blockedResponse(): Response {
+  return new Response(
+    JSON.stringify({ error: "Carapace blocked an unmapped network request." }),
+    { status: 501, headers: { "content-type": "application/json" } },
+  );
+}
+
+function beginBoundary(
+  beginActivity: ((url: URL | null) => () => void) | undefined,
+  url: URL | null,
+): ActivityBoundary {
+  if (beginActivity === undefined) {
+    return { valid: true, release: () => undefined };
+  }
+  let candidate: unknown;
+  try {
+    candidate = beginActivity(url);
+  } catch {
+    return { valid: false, release: () => undefined };
+  }
+  if (containPromiseLike(candidate) || typeof candidate !== "function") {
+    return { valid: false, release: () => undefined };
+  }
+  let active = true;
+  return {
+    valid: true,
+    release: (): undefined => {
+      if (!active) return undefined;
+      active = false;
+      try {
+        const returned: unknown = Reflect.apply(candidate, undefined, []);
+        containPromiseLike(returned);
+      } catch {
+        // Activity cleanup cannot turn a blocked request into an unhandled failure.
+      }
+      return undefined;
+    },
+  };
+}
+
+function explicitlyAllowed(
+  allow: ((url: URL) => boolean) | undefined,
+  url: URL | null,
+): boolean {
+  if (allow === undefined || url === null) return false;
+  try {
+    const returned: unknown = allow(url);
+    if (containPromiseLike(returned)) return false;
+    return returned === true;
+  } catch {
+    return false;
+  }
+}
+
+function notifyBlocked(
+  onBlocked: ((url: URL | null) => void) | undefined,
+  url: URL | null,
+): void {
+  if (onBlocked === undefined) return;
+  try {
+    const returned: unknown = onBlocked(url);
+    containPromiseLike(returned);
+  } catch {
+    // Reporting is observational and cannot bypass or reject the firewall.
+  }
+}
+
+/** Prepare a reversible replacement without deactivating the current owner. */
+export function prepareCarapaceFetchFirewallInstallation(
   options: CarapaceFetchFirewallOptions = {},
-): () => void {
-  uninstallActiveFirewall?.();
-  const previousFetch = globalThis.fetch;
-  const originalFetch: FetchCall = options.originalFetch ?? previousFetch;
+): PreparedCarapaceFetchFirewallInstallation {
+  const previousInstallation = activeFirewallInstallation;
+  const currentFetch = globalThis.fetch;
+  const previousOwnsCurrent = previousInstallation?.guardedFetch === currentFetch;
+  const restoreFetch = previousOwnsCurrent
+    ? previousInstallation.restoreFetch
+    : currentFetch;
+
+  // Capture every foreign option before mutating the global. A throwing getter
+  // therefore leaves an already-installed firewall intact.
+  const allow = options.allow;
+  const beginActivity = options.beginActivity;
+  const onBlocked = options.onBlocked;
+  const originalFetch: FetchCall = options.originalFetch ?? restoreFetch;
+  if (typeof originalFetch !== "function") {
+    throw new TypeError("Carapace fetch firewall requires a callable fetch implementation");
+  }
+
   const guardedCall: FetchCall = async (input, init) => {
     const url = requestUrl(input);
-    const release = options.beginActivity?.(url) ?? (() => undefined);
+    const activity = beginBoundary(beginActivity, url);
     try {
-      if (url !== null && options.allow?.(url) === true) {
+      if (activity.valid && explicitlyAllowed(allow, url)) {
         return await originalFetch(input, init);
       }
-      options.onBlocked?.(url);
-      return new Response(
-        JSON.stringify({ error: "Carapace blocked an unmapped network request." }),
-        { status: 501, headers: { "content-type": "application/json" } },
-      );
+      notifyBlocked(onBlocked, url);
+      return blockedResponse();
     } finally {
-      release();
+      activity.release();
     }
   };
-  const previousPreconnect = Reflect.get(previousFetch, "preconnect") as unknown;
+
+  const previousPreconnect: unknown = Reflect.get(restoreFetch, "preconnect");
   if (typeof previousPreconnect === "function") {
     Object.defineProperty(guardedCall, "preconnect", {
       configurable: true,
-      value: (...arguments_: unknown[]): void => {
-        Reflect.apply(previousPreconnect, previousFetch, arguments_);
+      value: (...arguments_: unknown[]): undefined => {
+        const url = requestUrl(arguments_[0]);
+        const activity = beginBoundary(beginActivity, url);
+        try {
+          if (activity.valid && explicitlyAllowed(allow, url)) {
+            const returned: unknown = Reflect.apply(previousPreconnect, restoreFetch, arguments_);
+            containPromiseLike(returned);
+          } else {
+            notifyBlocked(onBlocked, url);
+          }
+        } finally {
+          activity.release();
+        }
+        return undefined;
       },
     });
   }
+
   const guardedFetch = guardedCall as typeof fetch;
-  globalThis.fetch = guardedFetch;
-  let active = true;
-  const uninstall = (): void => {
-    if (!active) return;
-    active = false;
-    if (globalThis.fetch === guardedFetch) globalThis.fetch = previousFetch;
-    if (uninstallActiveFirewall === uninstall) uninstallActiveFirewall = null;
+  try {
+    globalThis.fetch = guardedFetch;
+    if (globalThis.fetch !== guardedFetch) {
+      throw new TypeError("Carapace fetch firewall could not replace global fetch");
+    }
+  } catch (reason) {
+    try {
+      if (globalThis.fetch === guardedFetch) globalThis.fetch = currentFetch;
+    } catch {
+      // Best-effort rollback on a hostile global; the original error is more useful.
+    }
+    throw reason;
+  }
+
+  let state: "prepared" | "committed" | "closed" = "prepared";
+  const rollback = (): undefined => {
+    if (state !== "prepared") return undefined;
+    if (globalThis.fetch === guardedFetch) globalThis.fetch = currentFetch;
+    state = "closed";
+    return undefined;
   };
-  uninstallActiveFirewall = uninstall;
-  return uninstall;
+  const deactivate = (): undefined => {
+    if (state !== "committed") return undefined;
+    state = "closed";
+    if (activeFirewallInstallation === installation) activeFirewallInstallation = null;
+    return undefined;
+  };
+  const uninstall = (): undefined => {
+    if (state === "prepared") return rollback();
+    if (state !== "committed") return undefined;
+    if (globalThis.fetch === guardedFetch) globalThis.fetch = restoreFetch;
+    state = "closed";
+    if (activeFirewallInstallation === installation) activeFirewallInstallation = null;
+    return undefined;
+  };
+  const installation: ActiveFetchFirewallInstallation = {
+    guardedFetch,
+    restoreFetch,
+    deactivate,
+    uninstall,
+  };
+  const commit = (): undefined => {
+    if (state !== "prepared") return undefined;
+    state = "committed";
+    if (previousInstallation !== null) previousInstallation.deactivate();
+    activeFirewallInstallation = installation;
+    return undefined;
+  };
+
+  return Object.freeze({
+    commit,
+    rollback,
+    uninstall,
+  });
+}
+
+/** Install one process-local, fail-closed fetch boundary for a browser Carapace frame. */
+export function installCarapaceFetchFirewall(
+  options: CarapaceFetchFirewallOptions = {},
+): CarapaceFetchFirewallUninstall {
+  const prepared = prepareCarapaceFetchFirewallInstallation(options);
+  prepared.commit();
+  return prepared.uninstall;
 }

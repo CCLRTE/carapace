@@ -20,14 +20,14 @@ async function rejection(promise: Promise<unknown>): Promise<Error> {
 describe("deterministic device status port", () => {
   test("returns the active world through an accounted operation", async () => {
     const session = requiredSession();
-    const operation = session.product.port.inspect();
-    expect(session.product.pendingOperations()).toBe(1);
+    const operation = session.harness.port.inspect();
+    expect(session.harness.pendingOperations()).toBe(1);
     expect(await operation).toEqual({
       platform: "ios",
       colorScheme: "light",
       capturedAt: "2026-01-15T14:30:00.000Z",
     });
-    expect(session.product.pendingOperations()).toBe(0);
+    expect(session.harness.pendingOperations()).toBe(0);
     expect(session.probe.snapshot()).toMatchObject({
       ok: true,
       value: {
@@ -41,25 +41,25 @@ describe("deterministic device status port", () => {
 
   test("surfaces a declared failure without leaking work", async () => {
     const session = requiredSession("?__carapace_scenario=inspection-failure");
-    expect((await rejection(session.product.port.inspect())).message)
+    expect((await rejection(session.harness.port.inspect())).message)
       .toContain("The deterministic device inspection is unavailable.");
-    expect(session.product.pendingOperations()).toBe(0);
+    expect(session.harness.pendingOperations()).toBe(0);
     session.dispose();
   });
 
   test("cancels in-flight work and rejects use after disposal", async () => {
     const session = requiredSession();
-    const operation = session.product.port.inspect();
+    const operation = session.harness.port.inspect();
     session.dispose();
     expect((await rejection(operation)).message).toMatch(/cancelled|aborted|disposed/u);
-    expect((await rejection(session.product.port.inspect())).message).toContain("disposed");
+    expect((await rejection(session.harness.port.inspect())).message).toContain("disposed");
     expect(session.isDisposed()).toBeTrue();
     expect(session.disposalErrors()).toEqual([]);
   });
 
   test("publishes product violations through the canonical probe", () => {
     const session = requiredSession();
-    session.product.recordBlockedNetworkRequest();
+    session.harness.recordBlockedNetworkRequest();
     expect(session.probe.snapshot()).toMatchObject({
       ok: true,
       value: { violations: { blockedNetworkRequests: 1 } },

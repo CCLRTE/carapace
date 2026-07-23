@@ -1,28 +1,42 @@
 import { parseCoverageKey, parseScenarioId, type CoverageKey, type ScenarioId } from "./ids.js";
 import { parseJsonValue } from "./json.js";
-import type { JsonValue } from "./json-value.js";
 import { err, isRecord, ok, type Result } from "./result.js";
-import type { ScenarioCatalog } from "./scenario.js";
 
-export const CARAPACE_COVERAGE_SCHEMA = "carapace.coverage/v1" as const;
+export const CARAPACE_COVERAGE_SCHEMA = "carapace.coverage/v2" as const;
 
 export type CoverageMode = "fixture" | "mixed" | "direct";
 
-export interface CoverageEntryInput<Route extends string> {
+type CoverageScenarioInput<Scenario extends string = string> = ScenarioId | Scenario;
+
+interface CoverageEntryInputBase {
   readonly key: string;
-  readonly mode: CoverageMode;
   readonly claim: string;
-  readonly route: Route | null;
-  readonly scenarios: readonly (ScenarioId | string)[];
 }
 
-export interface CoverageEntry<Route extends string> {
+export type CoverageEntryInput<Scenario extends string = string> =
+  | (CoverageEntryInputBase & {
+    readonly mode: "direct";
+    readonly scenarios: readonly [];
+  })
+  | (CoverageEntryInputBase & {
+    readonly mode: "fixture" | "mixed";
+    readonly scenarios: readonly [CoverageScenarioInput<Scenario>, ...CoverageScenarioInput<Scenario>[]];
+  });
+
+interface CoverageEntryBase {
   readonly key: CoverageKey;
-  readonly mode: CoverageMode;
   readonly claim: string;
-  readonly route: Route | null;
-  readonly scenarios: readonly ScenarioId[];
 }
+
+export type CoverageEntry =
+  | (CoverageEntryBase & {
+    readonly mode: "direct";
+    readonly scenarios: readonly [];
+  })
+  | (CoverageEntryBase & {
+    readonly mode: "fixture" | "mixed";
+    readonly scenarios: readonly [ScenarioId, ...ScenarioId[]];
+  });
 
 export type CoverageErrorCode =
   | "duplicate-coverage"
@@ -30,7 +44,6 @@ export type CoverageErrorCode =
   | "invalid-claim"
   | "invalid-coverage"
   | "invalid-mode"
-  | "invalid-route"
   | "invalid-scenario"
   | "missing-coverage"
   | "unexpected-coverage"
@@ -43,24 +56,24 @@ export interface CoverageError {
   readonly keys: readonly string[];
 }
 
-export interface CoverageCatalog<Route extends string> {
+export interface CoverageCatalog {
   readonly size: number;
   readonly keys: () => readonly CoverageKey[];
-  readonly list: () => readonly CoverageEntry<Route>[];
-  readonly get: (key: CoverageKey) => CoverageEntry<Route> | undefined;
-  readonly resolve: (key: unknown) => Result<CoverageEntry<Route>, CoverageError>;
+  readonly list: () => readonly CoverageEntry[];
+  readonly get: (key: CoverageKey) => CoverageEntry | undefined;
+  readonly resolve: (key: unknown) => Result<CoverageEntry, CoverageError>;
   readonly requireExactKeys: (expected: readonly (CoverageKey | string)[]) => Result<true, CoverageError>;
 }
 
-export interface CoverageCatalogSnapshot<Route extends string = string> {
+export interface CoverageCatalogSnapshot {
   readonly schema: typeof CARAPACE_COVERAGE_SCHEMA;
-  readonly entries: readonly CoverageEntry<Route>[];
+  readonly entries: readonly CoverageEntry[];
 }
 
 export const EMPTY_COVERAGE_CATALOG_SNAPSHOT = Object.freeze({
   schema: CARAPACE_COVERAGE_SCHEMA,
   entries: Object.freeze([]),
-}) satisfies CoverageCatalogSnapshot<string>;
+}) satisfies CoverageCatalogSnapshot;
 
 function coverageError(code: CoverageErrorCode, message: string, keys: readonly string[] = []): CoverageError {
   return { code, message, keys };
@@ -76,13 +89,17 @@ function hasControlCharacters(value: string): boolean {
   return false;
 }
 
-const COVERAGE_ENTRY_KEYS = new Set(["key", "mode", "claim", "route", "scenarios"]);
+const COVERAGE_ENTRY_KEYS = new Set(["key", "mode", "claim", "scenarios"]);
 const COVERAGE_SNAPSHOT_KEYS = new Set(["schema", "entries"]);
 
+function isStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((entry: unknown) => typeof entry === "string");
+}
+
 /** Create the exact versioned JSON snapshot published to verification tooling. */
-export function createCoverageCatalogSnapshot<Route extends string>(
-  catalog: CoverageCatalog<Route>,
-): CoverageCatalogSnapshot<Route> {
+export function createCoverageCatalogSnapshot(
+  catalog: CoverageCatalog,
+): CoverageCatalogSnapshot {
   return Object.freeze({
     schema: CARAPACE_COVERAGE_SCHEMA,
     entries: catalog.list(),
@@ -92,7 +109,7 @@ export function createCoverageCatalogSnapshot<Route extends string>(
 /** Parse an exact versioned coverage snapshot read from verification tooling. */
 export function parseCoverageCatalogSnapshot(
   input: unknown,
-): Result<CoverageCatalogSnapshot<string>, CoverageError> {
+): Result<CoverageCatalogSnapshot, CoverageError> {
   const parsed = parseJsonValue(input);
   if (!parsed.ok || !isRecord(parsed.value)) {
     return err(coverageError(
@@ -114,7 +131,7 @@ export function parseCoverageCatalogSnapshot(
   if (!Array.isArray(parsed.value.entries)) {
     return err(coverageError("invalid-coverage", "Coverage snapshot entries must be an array"));
   }
-  const entries: CoverageEntryInput<string>[] = [];
+  const entries: CoverageEntryInput[] = [];
   for (const [index, candidate] of parsed.value.entries.entries()) {
     if (!isRecord(candidate)) {
       return err(coverageError("invalid-coverage", `Coverage entry ${String(index)} must be an object`));
@@ -131,36 +148,54 @@ export function parseCoverageCatalogSnapshot(
       typeof candidate.key !== "string"
       || typeof candidate.claim !== "string"
       || (candidate.mode !== "fixture" && candidate.mode !== "mixed" && candidate.mode !== "direct")
-      || (candidate.route !== null && typeof candidate.route !== "string")
-      || !Array.isArray(candidate.scenarios)
-      || !candidate.scenarios.every((scenario) => typeof scenario === "string")
+      || !isStringArray(candidate.scenarios)
     ) {
       return err(coverageError(
         "invalid-coverage",
         `Coverage entry ${String(index)} has an invalid wire shape`,
       ));
     }
-    entries.push({
-      key: candidate.key,
-      mode: candidate.mode,
-      claim: candidate.claim,
-      route: candidate.route,
-      scenarios: candidate.scenarios,
-    });
+    if (candidate.mode === "direct") {
+      if (candidate.scenarios.length > 0) {
+        return err(coverageError(
+          "invalid-mode",
+          `Direct coverage ${candidate.key} cannot cite fixture scenarios`,
+          [candidate.key],
+        ));
+      }
+      entries.push({
+        key: candidate.key,
+        mode: candidate.mode,
+        claim: candidate.claim,
+        scenarios: [],
+      });
+    } else {
+      const firstScenario = candidate.scenarios[0];
+      if (typeof firstScenario !== "string") {
+        return err(coverageError(
+          "invalid-mode",
+          `${candidate.mode} coverage ${candidate.key} must cite at least one scenario`,
+          [candidate.key],
+        ));
+      }
+      entries.push({
+        key: candidate.key,
+        mode: candidate.mode,
+        claim: candidate.claim,
+        scenarios: [firstScenario, ...candidate.scenarios.slice(1)],
+      });
+    }
   }
-  const catalog = createCoverageCatalog<JsonValue, string>(entries);
+  const catalog = createCoverageCatalog(entries);
   return catalog.ok ? ok(createCoverageCatalogSnapshot(catalog.value)) : catalog;
 }
 
-export function createCoverageCatalog<
-  World extends JsonValue,
-  Route extends string,
->(
-  inputs: readonly CoverageEntryInput<Route>[],
-  scenarios?: ScenarioCatalog<World, Route>,
-): Result<CoverageCatalog<Route>, CoverageError> {
-  const entries: CoverageEntry<Route>[] = [];
-  const byKey = new Map<CoverageKey, CoverageEntry<Route>>();
+export function createCoverageCatalog<Scenario extends string = string>(
+  inputs: readonly CoverageEntryInput<Scenario>[],
+  scenarios?: { readonly get: (id: ScenarioId) => unknown },
+): Result<CoverageCatalog, CoverageError> {
+  const entries: CoverageEntry[] = [];
+  const byKey = new Map<CoverageKey, CoverageEntry>();
 
   for (const input of inputs) {
     const key = parseCoverageKey(input.key);
@@ -179,12 +214,6 @@ export function createCoverageCatalog<
     }
     if (input.mode !== "fixture" && input.mode !== "mixed" && input.mode !== "direct") {
       return err(coverageError("invalid-mode", `Coverage ${key.value} has an unknown proof mode`, [key.value]));
-    }
-    if (
-      input.route !== null
-      && (input.route.trim().length === 0 || input.route.length > 256)
-    ) {
-      return err(coverageError("invalid-route", `Coverage ${key.value} has an invalid route`, [key.value]));
     }
     if (input.mode === "direct" && input.scenarios.length > 0) {
       return err(coverageError("invalid-mode", `Direct coverage ${key.value} cannot cite fixture scenarios`, [key.value]));
@@ -210,20 +239,42 @@ export function createCoverageCatalog<
       scenarioIds.push(id.value);
     }
 
-    const entry = Object.freeze({
-      key: key.value,
-      mode: input.mode,
-      claim: input.claim,
-      route: input.route,
-      scenarios: Object.freeze(scenarioIds),
-    });
+    let entry: CoverageEntry;
+    if (input.mode === "direct") {
+      const scenarios: readonly [] = Object.freeze([]);
+      entry = Object.freeze({
+        key: key.value,
+        mode: input.mode,
+        claim: input.claim,
+        scenarios,
+      } satisfies CoverageEntry);
+    } else {
+      const firstScenarioId = scenarioIds[0];
+      if (firstScenarioId === undefined) {
+        return err(coverageError(
+          "invalid-mode",
+          `${input.mode} coverage ${key.value} must cite at least one scenario`,
+          [key.value],
+        ));
+      }
+      const scenarios: readonly [ScenarioId, ...ScenarioId[]] = Object.freeze([
+        firstScenarioId,
+        ...scenarioIds.slice(1),
+      ]);
+      entry = Object.freeze({
+        key: key.value,
+        mode: input.mode,
+        claim: input.claim,
+        scenarios,
+      } satisfies CoverageEntry);
+    }
     entries.push(entry);
     byKey.set(key.value, entry);
   }
 
   const frozenEntries = Object.freeze(entries);
   const keys = Object.freeze(frozenEntries.map((entry) => entry.key));
-  const catalog: CoverageCatalog<Route> = {
+  const catalog: CoverageCatalog = {
     size: frozenEntries.length,
     keys: () => keys,
     list: () => frozenEntries,

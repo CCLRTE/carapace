@@ -8,8 +8,8 @@ describe("deterministic todo composition", () => {
     const created = createTodoCarapaceSession(`?${SCENARIO_QUERY_KEY}=todos.populated`);
     if (!created.ok) throw new Error(created.error.message);
 
-    expect(await created.value.product.port.readTodos()).toHaveLength(2);
-    expect(await created.value.product.port.setCompleted("write-docs", true)).toContainEqual({
+    expect(await created.value.harness.port.readTodos()).toHaveLength(2);
+    expect(await created.value.harness.port.setCompleted("write-docs", true)).toContainEqual({
       id: "write-docs",
       title: "Write the public guide",
       completed: true,
@@ -33,14 +33,14 @@ describe("deterministic todo composition", () => {
 
     let rejection: unknown;
     try {
-      await created.value.product.port.setCompleted("write-docs", true);
+      await created.value.harness.port.setCompleted("write-docs", true);
     } catch (reason) {
       rejection = reason;
     }
     expect(rejection).toBeInstanceOf(Error);
     if (!(rejection instanceof Error)) throw new Error("Expected the deterministic write to reject.");
     expect(rejection.message).toContain("deterministic store rejected");
-    expect(await created.value.product.port.readTodos()).toContainEqual({
+    expect(await created.value.harness.port.readTodos()).toContainEqual({
       id: "write-docs",
       title: "Write the public guide",
       completed: false,

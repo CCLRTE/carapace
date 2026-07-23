@@ -52,29 +52,32 @@ Consumers must parse a snapshot before trusting it. The parser rejects unknown f
 
 Schema: `carapace.browser-bridge/v1`
 
-The canonical bridge is installed as `window.__carapace` and exposes:
+`installCarapaceBrowser({ session })` installs the canonical bridge as `window.__carapace`. It derives the validated probe and coverage snapshot from the session and exposes:
 
 - `snapshot()` for the current validated probe value;
-- `reset()` for the product-owned reset action; and
+- `reset()` for the synchronous product-owned reset action; and
 - `coverage` for the JSON-safe coverage catalog.
 
-The coverage value uses schema `carapace.coverage/v1` and has the exact shape:
+The reset callback must complete synchronously and return `undefined`. If an asserted or hostile callback returns a thenable, the bridge contains its settlement and throws a controlled synchronous-completion error.
+
+The coverage value uses schema `carapace.coverage/v2` and has the exact shape:
 
 ```json
 {
-  "schema": "carapace.coverage/v1",
+  "schema": "carapace.coverage/v2",
   "entries": [
     {
       "key": "todos.completion",
       "mode": "fixture",
       "claim": "The real todo interface completes tasks through its product port.",
-      "route": "/",
       "scenarios": ["todos.populated"]
     }
   ]
 }
 ```
 
-Consumers must parse the snapshot before using it. Unknown fields, duplicate keys, invalid modes, and inconsistent scenario requirements are rejected.
+Coverage entries cite scenarios rather than duplicating a singular route. The scenario catalog owns each route, and one coverage claim may intentionally span scenarios on different routes.
+
+Consumers must parse the coverage value before using it. Unknown fields, duplicate keys, invalid modes, and inconsistent scenario requirements are rejected.
 
 The bridge is a development automation seam. Do not install it from a production entry.

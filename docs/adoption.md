@@ -2,6 +2,8 @@
 
 Add Carapace after identifying the product behavior and external boundary under review. Do not begin by designing fixtures around a provider SDK.
 
+Beginning with v0.3.0, the installed package carries the `carapace-setup` Agent Skill under `skills/carapace-setup`. Copy or link that directory into your agent runner's discovery location and invoke `$carapace-setup` to apply this workflow from a coding-agent task. Package installation does not activate the skill automatically.
+
 ## 1. Define the product port
 
 Put a semantic interface beside the product feature. Move provider, storage, native-module, or service imports into a production adapter. Compose that adapter from the production entry.
@@ -16,13 +18,16 @@ Add example tests for useful worlds and rejected regressions. Add property tests
 
 ## 3. Define scenarios and coverage
 
-Call `defineCarapace` once with the world parser, one validated default, stable scenario identifiers, and explicit coverage entries.
+Call `defineCarapace` once with the world parser, one validated default, stable scenario identifiers, and explicit coverage entries. Authored invalid configuration throws during startup because it is a programming error. Use `tryDefineCarapace` for typed configuration assembled dynamically. Use `parseCarapaceDefinition` for a genuinely unknown value; its result deliberately retains broad JSON-world and string-route types.
+
+A scenario contains initial world, route, and optional logical-runtime state. Browser actions, semantic assertions, and evidence policy belong to the product verifier rather than the scenario catalog.
 
 - Use `fixture` when deterministic ports support the full claim.
 - Use `mixed` when the fixture claim requires named direct adapter or service evidence.
 - Use `direct` when the real external system is the claim.
 
 Do not attach scenarios to a direct claim. Do not leave a fixture claim without a scenario.
+Coverage cites scenario IDs rather than copying a route; resolve each cited scenario through the catalog when the verifier needs its route. A single claim may span scenarios on different routes.
 
 ## 4. Implement deterministic adapters
 
@@ -34,15 +39,15 @@ Unknown requests and unmapped operations must fail. Keep remaining scripted work
 
 Use `createCarapaceSession` from `@cclrte/carapace/testing` to activate the query, create the store, clock, activity scope, product adapters, observation counters, cancellation signal, and cleanup stack.
 
-Register cleanup while constructing the product. Dispose subscriptions, timers, scripts, repositories, and event sources when the session ends.
+Return the product-owned ports and diagnostics as the session's `harness`. Register cleanup while constructing it. Dispose subscriptions, timers, scripts, repositories, and event sources when the session ends. The session also exposes a validated coverage snapshot for browser automation; callers do not need to serialize the definition's catalog themselves.
 
 ## 6. Add a separate composition boundary
 
 Render the real product interface with deterministic adapters from a distinct Carapace graph. A web or desktop product may use a separate entry. An Expo product may keep a shared entry and route tree while an extensionless import resolves to nested `.native` and `.web` composition modules. In either shape, production modules cannot reach the Carapace graph.
 
-Install `installCarapaceBrowserBridge` and `installCarapaceFetchFirewall` only in the Carapace browser composition, never in a production entry or native platform variant.
+Call `installCarapaceBrowser({ session })` only in the Carapace browser composition, never in a production entry or native platform variant. The atomic installation publishes the session's probe and coverage catalog through `window.__carapace`, installs the fail-closed fetch firewall by default, and returns one disposable handle. It also registers that cleanup with the session. A failed installation rolls back both browser hooks.
 
-Expose the validated coverage list through the bridge. Count blocked requests and other relevant failures as violations.
+Use `session.harness` from application composition code. Configure `firewall.onBlocked` and `firewall.onActivityError` when the product needs named violation counters. Pass `firewall: false` only when another checked boundary owns network containment.
 
 ## 7. Verify behavior and exclusion
 
@@ -59,7 +64,7 @@ Use platform resolution rather than a runtime flag. A small app can split `root.
 1. Keep the Expo Router entry, route modules, layouts, shared screens, reducers, and feature state common.
 2. Import a narrow composition or navigation-provider module without an extension.
 3. Implement its `.native.tsx` variant with production adapters and native navigation providers.
-4. Implement its `.web.tsx` variant with the Carapace world, session, deterministic ports, workbench, browser bridge, and fetch firewall.
+4. Implement its `.web.tsx` variant with the Carapace world, session, deterministic ports, workbench, and atomic browser installation.
 5. Pass the same product-owned ports and shared state into the same screens from both variants.
 
 Do not copy route behavior or feature state into the web variant. If native-only navigation chrome cannot render on web, provide the smallest substitute needed to reach the shared screens and label its proof boundary explicitly.

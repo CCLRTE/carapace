@@ -1,10 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import {
-  createCoverageCatalogSnapshot,
-  SCENARIO_QUERY_KEY,
-} from "@cclrte/carapace";
+import { SCENARIO_QUERY_KEY } from "@cclrte/carapace";
 
 import { todoCarapaceDefinition } from "./definition";
+import { createTodoCarapaceSession } from "./session";
 
 describe("todo Carapace definition", () => {
   test("activates the default and every stable scenario", () => {
@@ -29,8 +27,10 @@ describe("todo Carapace definition", () => {
       "todos.write.failure",
       "storage.local.direct",
     ])).toEqual({ ok: true, value: true });
-    const snapshot = createCoverageCatalogSnapshot(todoCarapaceDefinition.coverage);
-    expect(snapshot.schema).toBe("carapace.coverage/v1");
+    const created = createTodoCarapaceSession("");
+    if (!created.ok) throw new Error(created.error.message);
+    const snapshot = created.value.coverage;
+    expect(snapshot.schema).toBe("carapace.coverage/v2");
     const direct = snapshot.entries.at(-1);
     expect(direct).toBeDefined();
     if (direct === undefined) throw new Error("Direct storage coverage is missing");
@@ -42,8 +42,8 @@ describe("todo Carapace definition", () => {
       key: "storage.local.direct",
       mode: "direct",
       claim: "Browser local-storage parsing, quota behavior, and persistence require direct production-adapter evidence.",
-      route: null,
       scenarios: [],
     });
+    created.value.dispose();
   });
 });

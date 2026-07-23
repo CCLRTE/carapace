@@ -1,17 +1,7 @@
-import {
-  createCoverageCatalogSnapshot,
-  err,
-  ok,
-  type Result,
-} from "@cclrte/carapace";
 import type { CarapaceSession } from "@cclrte/carapace/testing";
-import {
-  installCarapaceBrowserBridge,
-  installCarapaceFetchFirewall,
-} from "@cclrte/carapace/web";
+import { installCarapaceBrowser } from "@cclrte/carapace/web";
 
 import {
-  deviceStatusCarapaceDefinition,
   type DeviceStatusCarapaceRoute,
 } from "./definition";
 import {
@@ -35,36 +25,37 @@ export interface DeviceStatusCarapaceMountError {
   readonly message: string;
 }
 
+export type DeviceStatusCarapaceMountResult =
+  | { readonly ok: true; readonly value: MountedDeviceStatusCarapace }
+  | { readonly ok: false; readonly error: DeviceStatusCarapaceMountError };
+
 /** Own one complete browser installation so React effect replay can replace it safely. */
 export function mountDeviceStatusCarapace(
   source: string,
-): Result<MountedDeviceStatusCarapace, DeviceStatusCarapaceMountError> {
+): DeviceStatusCarapaceMountResult {
   const created = createDeviceStatusCarapaceSession(source);
-  if (!created.ok) return err(Object.freeze({ message: created.error.message }));
-
-  const session = created.value;
-  const uninstallFirewall = installCarapaceFetchFirewall({
-    onBlocked: session.product.recordBlockedNetworkRequest,
-  });
-  const bridge = installCarapaceBrowserBridge({
-    probe: session.probe,
-    coverage: createCoverageCatalogSnapshot(deviceStatusCarapaceDefinition.coverage),
-  });
-  if (!bridge.ok) {
-    uninstallFirewall();
-    session.dispose();
-    return err(Object.freeze({ message: bridge.error.message }));
+  if (!created.ok) {
+    return Object.freeze({
+      ok: false,
+      error: Object.freeze({ message: created.error.message }),
+    });
   }
 
-  let disposed = false;
-  return ok(Object.freeze({
+  const session = created.value;
+  const browser = installCarapaceBrowser({
     session,
-    dispose: (): void => {
-      if (disposed) return;
-      disposed = true;
-      bridge.value();
-      uninstallFirewall();
-      session.dispose();
-    },
-  }));
+    firewall: { onBlocked: session.harness.recordBlockedNetworkRequest },
+  });
+  if (!browser.ok) {
+    session.dispose();
+    return Object.freeze({
+      ok: false,
+      error: Object.freeze({ message: browser.error.message }),
+    });
+  }
+
+  return Object.freeze({
+    ok: true,
+    value: Object.freeze({ session, dispose: session.dispose }),
+  });
 }

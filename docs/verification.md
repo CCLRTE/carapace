@@ -1,10 +1,12 @@
 # Verification
 
-Carapace reports deterministic activity and proof boundaries. The product verifier decides which scenarios to run, which interactions to perform, and which evidence closes each claim.
+Carapace reports deterministic activity and proof boundaries. The definition owns the declared scenarios and coverage claims. A session owns one activation, harness, probe, and validated coverage snapshot. The product verifier decides which scenarios to run, which interactions to perform, and which evidence closes each claim. Parse browser coverage with `parseDefinitionCoverageSnapshot(value, definition)` so a valid but stale catalog cannot be mistaken for the catalog under review.
+
+Beginning with v0.3.0, the installed package carries the `carapace-verify` Agent Skill under `skills/carapace-verify`. Copy or link that directory into your agent runner's discovery location and invoke `$carapace-verify` for the workflow below. The skill structures the audit; it does not turn deterministic evidence into proof of a substituted live system.
 
 ## Wait for quiescence
 
-Read `window.__carapace.snapshot()` through the browser bridge. A snapshot is quiet when:
+Install the browser boundary with `installCarapaceBrowser({ session })`, then read `window.__carapace.snapshot()` through its canonical bridge. A snapshot is quiet when:
 
 - the current store generation has zero active operations;
 - every product-named pending counter is zero; and
@@ -30,10 +32,15 @@ The package does not choose a browser driver or visual-comparison policy. Keep t
 
 Report each catalog entry against the scenarios and direct gates actually exercised:
 
-- `verified`: every declared fixture scenario ran and passed, or all named halves of a mixed claim passed.
+- `verified`: every fixture scenario and direct gate required by the claim's declared mode ran and passed.
+- `fixture-verified`: every declared fixture scenario for a mixed claim ran and passed, while its direct half remains open.
 - `partial`: some declared evidence passed, but required scenarios or direct gates remain.
 - `not-exercised`: the run produced no evidence for the claim.
 - `direct-required`: the claim cannot be closed by this deterministic run.
+
+A browser-only run therefore reports a completed fixture claim as `verified`, a completed fixture half of a mixed claim as `fixture-verified`, and a direct claim as `direct-required`. A wider verification run may report a mixed or direct claim as `verified` after its named direct evidence passes.
+
+Use `classifyCoverageEvidence` from `@cclrte/carapace/testing` after the product-owned assertions finish. Pass only scenario IDs whose claim-specific assertions passed, plus `directEvidence: "verified"` only when the named direct gate is current and green. The mode-specific return type prevents a fixture claim from becoming `fixture-verified` or `direct-required`.
 
 Never report a fixture scenario as proof of the adapter, service, host, browser assembly, operating system, or device it replaced.
 

@@ -1,6 +1,12 @@
 import { expect, test } from "bun:test";
 import { assertProperty, fc } from "./test-support.js";
-import { canonicalJson, parseAndCloneWorld, parseJsonValue, stableHash } from "./json.js";
+import {
+  canonicalJson,
+  parseAndCloneWorld,
+  parseExactJsonSource,
+  parseJsonValue,
+  stableHash,
+} from "./json.js";
 
 test("property: strict JSON parsing is total over arbitrary JavaScript values", () => {
   assertProperty(fc.property(fc.anything({ withBigInt: true, withMap: true, withSet: true }), (value) => {
@@ -45,6 +51,35 @@ test("property: canonical JSON round trips and hashes identically", () => {
     expect(canonicalJson(roundTripped)).toEqual(first);
     expect(stableHash(roundTripped)).toEqual(stableHash(value));
   }));
+});
+
+test("property: exact JSON decoding agrees with JSON.parse for generated JSON", () => {
+  assertProperty(fc.property(fc.jsonValue(), (value) => {
+    const source = JSON.stringify(value);
+    expect(parseExactJsonSource(source)).toEqual({
+      ok: true,
+      value: JSON.parse(source) as unknown,
+    });
+  }));
+});
+
+test("property: duplicate object keys are rejected at arbitrary nested decoded-key paths", () => {
+  assertProperty(fc.property(fc.string(), fc.integer({ min: 0, max: 40 }), (key, depth) => {
+    const encodedKey = JSON.stringify(key);
+    let source = `{${encodedKey}:1,${encodedKey}:2}`;
+    for (let index = 0; index < depth; index += 1) {
+      source = index % 2 === 0 ? `[${source}]` : `{"outer":${source}}`;
+    }
+
+    expect(parseExactJsonSource(source)).toMatchObject({
+      ok: false,
+      error: { code: "duplicate-key" },
+    });
+  }));
+  expect(parseExactJsonSource('{"a":1,"\\u0061":2}')).toMatchObject({
+    ok: false,
+    error: { code: "duplicate-key", path: "$.a" },
+  });
 });
 
 test("prototype-shaped keys remain own JSON data and participate in canonical hashes", () => {

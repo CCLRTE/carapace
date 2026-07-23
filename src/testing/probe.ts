@@ -10,7 +10,7 @@ export const MAX_CARAPACE_PROBE_COUNTERS = 128;
 export interface CarapaceCounterSource {
   readonly name: string;
   /** Foreign counter reads are validated on every snapshot. */
-  readonly read: () => unknown;
+  readonly read: () => number;
 }
 
 export interface CarapaceProbeSnapshot {
@@ -27,10 +27,13 @@ export interface CarapaceProbeSnapshot {
 }
 
 export type CarapaceProbeErrorCode =
+  | "asynchronous-read"
   | "duplicate-counter"
   | "invalid-activation-hash"
   | "invalid-counter"
   | "invalid-counter-name"
+  | "invalid-counter-source"
+  | "invalid-options"
   | "invalid-remaining-work"
   | "invalid-snapshot"
   | "probe-read-failed"
@@ -52,11 +55,17 @@ export interface CarapaceProbeOptions<World extends JsonValue> {
   readonly activationHash: string;
   readonly pending?: readonly CarapaceCounterSource[];
   readonly violations?: readonly CarapaceCounterSource[];
-  readonly readRemainingWork?: () => unknown;
+  readonly readRemainingWork?: () => JsonValue;
 }
 
 interface PreparedCounterSource extends CarapaceCounterSource {
   readonly category: "pending" | "violation";
+}
+
+function freezeCounterSources(
+  sources: readonly CarapaceCounterSource[],
+): readonly CarapaceCounterSource[] {
+  return Object.freeze([...sources]);
 }
 
 const COUNTER_NAME_PATTERN = /^[a-z][A-Za-z0-9]*(?:[.-][A-Za-z0-9]+)*$/u;
@@ -94,6 +103,18 @@ function readNonNegativeInteger(input: unknown): number | null {
   return typeof input === "number" && Number.isSafeInteger(input) && input >= 0
     ? input
     : null;
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    (typeof value === "object" && value !== null) || typeof value === "function"
+  ) && typeof Reflect.get(value, "then") === "function";
+}
+
+function containPromiseLike(value: unknown): boolean {
+  if (!isPromiseLike(value)) return false;
+  void Promise.resolve(value).catch(() => undefined);
+  return true;
 }
 
 function parseSnapshotCounters(
@@ -159,6 +180,12 @@ export function parseCarapaceProbeSnapshot(
       "Carapace probe generation must be positive and revision must be non-negative",
     ));
   }
+  if (generation - 1 > revision) {
+    return err(probeError(
+      "invalid-snapshot",
+      "Carapace probe generation cannot exceed revision plus one",
+    ));
+  }
   if (!isRecord(record.activity)) {
     return err(probeError("invalid-snapshot", "Carapace probe activity must be an object"));
   }
@@ -180,6 +207,12 @@ export function parseCarapaceProbeSnapshot(
     return err(probeError(
       "invalid-snapshot",
       "Carapace activity counters must be non-negative and conserve started work",
+    ));
+  }
+  if (started > revision || settled > revision - started) {
+    return err(probeError(
+      "invalid-snapshot",
+      "Carapace activity transitions cannot exceed the store revision",
     ));
   }
   const pending = parseSnapshotCounters(record.pending, "pending");
@@ -219,7 +252,7 @@ export function parseCarapaceProbeSnapshot(
   }));
 }
 
-function prepareCounters(
+function prepareCountersUnchecked(
   pending: readonly CarapaceCounterSource[],
   violations: readonly CarapaceCounterSource[],
 ): Result<readonly PreparedCounterSource[], CarapaceProbeError> {
@@ -236,19 +269,28 @@ function prepareCounters(
     ["violation", violations],
   ] as const) {
     for (const source of sources) {
-      if (source.name.length > 80 || !COUNTER_NAME_PATTERN.test(source.name)) {
+      const name = source.name;
+      const read = source.read;
+      if (typeof name !== "string" || name.length > 80 || !COUNTER_NAME_PATTERN.test(name)) {
         return err(probeError(
           "invalid-counter-name",
           "Counter names must be 1-80 ASCII alphanumeric characters with optional dots or hyphens",
-          source.name,
+          typeof name === "string" ? name : null,
         ));
       }
-      const key = `${category}:${source.name}`;
+      if (typeof read !== "function") {
+        return err(probeError(
+          "invalid-counter-source",
+          `Counter ${name} must provide a synchronous read function`,
+          name,
+        ));
+      }
+      const key = `${category}:${name}`;
       if (seen.has(key)) {
-        return err(probeError("duplicate-counter", `Duplicate ${category} counter: ${source.name}`, source.name));
+        return err(probeError("duplicate-counter", `Duplicate ${category} counter: ${name}`, name));
       }
       seen.add(key);
-      prepared.push(Object.freeze({ ...source, category }));
+      prepared.push(Object.freeze({ name, read, category }));
     }
   }
   prepared.sort((left, right) => {
@@ -257,6 +299,20 @@ function prepareCounters(
     return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
   });
   return ok(Object.freeze(prepared));
+}
+
+function prepareCounters(
+  pending: readonly CarapaceCounterSource[],
+  violations: readonly CarapaceCounterSource[],
+): Result<readonly PreparedCounterSource[], CarapaceProbeError> {
+  try {
+    return prepareCountersUnchecked(pending, violations);
+  } catch (reason) {
+    return err(probeError(
+      "invalid-counter-source",
+      renderUnknownReason(reason, "Carapace counter inspection failed"),
+    ));
+  }
 }
 
 function readCounters(
@@ -271,6 +327,13 @@ function readCounters(
     let value: unknown;
     try {
       value = source.read();
+      if (containPromiseLike(value)) {
+        return err(probeError(
+          "asynchronous-read",
+          `Counter ${source.name} must be read synchronously`,
+          source.name,
+        ));
+      }
     } catch (reason) {
       return err(probeError(
         "probe-read-failed",
@@ -290,10 +353,16 @@ function readCounters(
   return ok({ pending: Object.freeze(pending), violations: Object.freeze(violations) });
 }
 
-function readRemaining(read: () => unknown): Result<JsonValue, CarapaceProbeError> {
+function readRemaining(read: () => JsonValue): Result<JsonValue, CarapaceProbeError> {
   let candidate: unknown;
   try {
     candidate = read();
+    if (containPromiseLike(candidate)) {
+      return err(probeError(
+        "asynchronous-read",
+        "Remaining work must be read synchronously",
+      ));
+    }
   } catch (reason) {
     return err(probeError(
       "probe-read-failed",
@@ -310,27 +379,52 @@ function readRemaining(read: () => unknown): Result<JsonValue, CarapaceProbeErro
 export function createCarapaceProbe<World extends JsonValue>(
   options: CarapaceProbeOptions<World>,
 ): Result<CarapaceProbe, CarapaceProbeError> {
-  if (!validActivationHash(options.activationHash)) {
+  let store: CarapaceStore<World>;
+  let activationHash: string;
+  let pending: readonly CarapaceCounterSource[];
+  let violations: readonly CarapaceCounterSource[];
+  let readRemainingWork: () => JsonValue;
+  try {
+    store = options.store;
+    activationHash = options.activationHash;
+    const pendingInput = options.pending ?? [];
+    const violationsInput = options.violations ?? [];
+    readRemainingWork = options.readRemainingWork ?? (() => Object.freeze({}));
+    if (!Array.isArray(pendingInput) || !Array.isArray(violationsInput)) {
+      return err(probeError("invalid-options", "Carapace probe counters must be arrays"));
+    }
+    if (typeof readRemainingWork !== "function") {
+      return err(probeError("invalid-options", "Carapace remaining-work reader must be a function"));
+    }
+    pending = freezeCounterSources(pendingInput);
+    violations = freezeCounterSources(violationsInput);
+  } catch (reason) {
+    return err(probeError(
+      "invalid-options",
+      renderUnknownReason(reason, "Carapace probe options could not be inspected"),
+    ));
+  }
+
+  if (typeof activationHash !== "string" || !validActivationHash(activationHash)) {
     return err(probeError(
       "invalid-activation-hash",
       "Activation hashes must be 1-256 characters without control characters",
     ));
   }
-  const counters = prepareCounters(options.pending ?? [], options.violations ?? []);
+  const counters = prepareCounters(pending, violations);
   if (!counters.ok) return counters;
-  const readRemainingWork = options.readRemainingWork ?? (() => Object.freeze({}));
 
   const snapshot = (): Result<CarapaceProbeSnapshot, CarapaceProbeError> => {
     const read = readCounters(counters.value);
     if (!read.ok) return read;
     const remaining = readRemaining(readRemainingWork);
     if (!remaining.ok) return remaining;
-    const storeSnapshot = options.store.getSnapshot();
+    const storeSnapshot = store.getSnapshot();
     const isQuiescent = storeSnapshot.activity.active === 0
       && Object.values(read.value.pending).every((value) => value === 0);
     const value = {
       schema: CARAPACE_PROBE_SCHEMA,
-      activationHash: options.activationHash,
+      activationHash,
       generation: Number(storeSnapshot.generation),
       revision: storeSnapshot.revision,
       activity: storeSnapshot.activity,

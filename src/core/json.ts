@@ -31,12 +31,28 @@ export interface JsonBoundaryError {
   readonly message: string;
 }
 
+export type ExactJsonSourceErrorCode = "duplicate-key" | "invalid-json";
+
+export interface ExactJsonSourceError {
+  readonly code: ExactJsonSourceErrorCode;
+  readonly path: string;
+  readonly message: string;
+}
+
 interface JsonBudget {
   nodes: number;
   stringBytes: number;
 }
 
 function jsonError(code: JsonBoundaryErrorCode, path: string, message: string): JsonBoundaryError {
+  return { code, path, message };
+}
+
+function exactJsonSourceError(
+  code: ExactJsonSourceErrorCode,
+  path: string,
+  message: string,
+): ExactJsonSourceError {
   return { code, path, message };
 }
 
@@ -61,6 +77,148 @@ export function utf8ByteLength(value: string): number {
     }
   }
   return bytes;
+}
+
+interface DuplicateJsonKey {
+  readonly key: string;
+  readonly path: string;
+}
+
+function childJsonPath(path: string, key: string): string {
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(key)
+    ? `${path}.${key}`
+    : `${path}[${JSON.stringify(key)}]`;
+}
+
+/** Scan syntactically valid JSON while retaining object-key occurrences. */
+function findDuplicateJsonKey(source: string): DuplicateJsonKey | null {
+  let index = 0;
+  let duplicate: DuplicateJsonKey | null = null;
+
+  const skipWhitespace = (): void => {
+    while (
+      source[index] === " "
+      || source[index] === "\n"
+      || source[index] === "\r"
+      || source[index] === "\t"
+    ) {
+      index += 1;
+    }
+  };
+
+  const readString = (): string => {
+    const start = index;
+    index += 1;
+    while (index < source.length) {
+      const character = source[index];
+      if (character === "\\") {
+        index += 2;
+        continue;
+      }
+      index += 1;
+      if (character === "\"") {
+        return JSON.parse(source.slice(start, index)) as string;
+      }
+    }
+    throw new Error("Unterminated JSON string");
+  };
+
+  const scanValue = (path: string): void => {
+    skipWhitespace();
+    const character = source[index];
+    if (character === "{") {
+      index += 1;
+      skipWhitespace();
+      if (source[index] === "}") {
+        index += 1;
+        return;
+      }
+      const keys = new Set<string>();
+      while (index < source.length) {
+        skipWhitespace();
+        const key = readString();
+        const keyPath = childJsonPath(path, key);
+        if (keys.has(key) && duplicate === null) {
+          duplicate = { key, path: keyPath };
+        }
+        keys.add(key);
+        skipWhitespace();
+        index += 1; // Colon. JSON.parse has already validated the grammar.
+        scanValue(keyPath);
+        skipWhitespace();
+        if (source[index] === "}") {
+          index += 1;
+          return;
+        }
+        index += 1; // Comma.
+      }
+      return;
+    }
+    if (character === "[") {
+      index += 1;
+      skipWhitespace();
+      if (source[index] === "]") {
+        index += 1;
+        return;
+      }
+      let itemIndex = 0;
+      while (index < source.length) {
+        scanValue(`${path}[${String(itemIndex)}]`);
+        itemIndex += 1;
+        skipWhitespace();
+        if (source[index] === "]") {
+          index += 1;
+          return;
+        }
+        index += 1; // Comma.
+      }
+      return;
+    }
+    if (character === "\"") {
+      readString();
+      return;
+    }
+    while (index < source.length) {
+      const next = source[index];
+      if (next === "," || next === "]" || next === "}" || /\s/u.test(next ?? "")) return;
+      index += 1;
+    }
+  };
+
+  skipWhitespace();
+  scanValue("$");
+  return duplicate;
+}
+
+/** Decode JSON text without allowing duplicate object keys to collapse. */
+export function parseExactJsonSource(
+  source: unknown,
+): Result<unknown, ExactJsonSourceError> {
+  if (typeof source !== "string") {
+    return err(exactJsonSourceError("invalid-json", "$", "JSON source must be a string"));
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(source) as unknown;
+  } catch {
+    return err(exactJsonSourceError("invalid-json", "$", "Source is not valid JSON"));
+  }
+  try {
+    const duplicate = findDuplicateJsonKey(source);
+    return duplicate === null
+      ? ok(parsed)
+      : err(exactJsonSourceError(
+        "duplicate-key",
+        duplicate.path,
+        `Duplicate JSON object key at ${duplicate.path}: ${duplicate.key}`,
+      ));
+  } catch (reason) {
+    return err(exactJsonSourceError(
+      "invalid-json",
+      "$",
+      renderUnknownReason(reason, "JSON source inspection failed"),
+    ));
+  }
 }
 
 function parseJsonAt(

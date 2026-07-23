@@ -24,6 +24,7 @@ export interface ScriptedTransportLimits {
 
 export type ScriptedTransportDefinitionErrorCode =
   | "invalid-limits"
+  | "invalid-options"
   | "invalid-script"
   | "invalid-step"
   | "script-too-large";
@@ -59,15 +60,18 @@ export type ScriptedTransportFailure<Failure extends JsonValue> =
   | { readonly kind: "scripted"; readonly failure: Failure }
   | { readonly kind: "transport"; readonly error: ScriptedTransportError };
 
+export type ScriptedTransportListener<Event extends JsonValue> = (event: Event) => undefined;
+export type ScriptedTransportListenerErrorReporter = (reason: unknown) => undefined;
+
 export interface ExactScriptedTransport<
   Response extends JsonValue,
   Event extends JsonValue,
   Failure extends JsonValue,
 > {
   readonly request: (input: unknown) => Promise<Result<Response, ScriptedTransportFailure<Failure>>>;
-  readonly subscribe: (listener: (event: Event) => void) => () => void;
+  readonly subscribe: (listener: ScriptedTransportListener<Event>) => () => undefined;
   /** Permanently fence requests, listeners, waits, and delayed event delivery. */
-  readonly dispose: () => void;
+  readonly dispose: () => undefined;
   readonly isDisposed: () => boolean;
   readonly remainingSteps: () => number;
   readonly pendingDeliveries: () => number;
@@ -93,7 +97,25 @@ export interface ExactScriptedTransportOptions<
   readonly activity?: Pick<CarapaceActivityScope, "begin">;
   readonly activityNamespace?: string;
   readonly limits?: ScriptedTransportLimits;
-  readonly onListenerError?: (reason: unknown) => void;
+  readonly onListenerError?: ScriptedTransportListenerErrorReporter;
+}
+
+interface CapturedScriptedTransportOptions<
+  Request extends JsonValue,
+  Response extends JsonValue,
+  Event extends JsonValue,
+  Failure extends JsonValue,
+> {
+  readonly wait: LogicalRuntime["wait"];
+  readonly parseRequest: WorldParser<Request>;
+  readonly parseResponse: WorldParser<Response>;
+  readonly parseEvent: WorldParser<Event>;
+  readonly parseFailure: WorldParser<Failure>;
+  readonly steps: unknown;
+  readonly beginActivity: CarapaceActivityScope["begin"] | undefined;
+  readonly activityNamespace: string;
+  readonly limits: ScriptedTransportLimits;
+  readonly onListenerError: ScriptedTransportListenerErrorReporter | undefined;
 }
 
 type ScriptedOutcome<Response extends JsonValue, Failure extends JsonValue> =
@@ -194,7 +216,7 @@ function parseSteps<
   Event extends JsonValue,
   Failure extends JsonValue,
 >(
-  options: ExactScriptedTransportOptions<Request, Response, Event, Failure>,
+  options: CapturedScriptedTransportOptions<Request, Response, Event, Failure>,
   limits: ScriptedTransportLimits,
 ): Result<readonly ScriptedStep<Request, Response, Event, Failure>[], ScriptedTransportDefinitionError> {
   const json = parseJsonValue(options.steps);
@@ -342,6 +364,20 @@ function runtimeFailureMessage(error: RuntimeError): string {
   return `Logical wait failed: ${renderUnknownReason(error, "Unknown logical runtime failure")}`;
 }
 
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    (typeof value === "object" && value !== null) || typeof value === "function"
+  ) && typeof Reflect.get(value, "then") === "function";
+}
+
+function synchronousReturnViolation(value: unknown, label: string): Error | null {
+  if (value === undefined) return null;
+  if (isPromiseLike(value)) {
+    void Promise.resolve(value).catch(() => undefined);
+  }
+  return new Error(`${label} must complete synchronously and return undefined`);
+}
+
 /**
  * Build an ordered transport double whose script is exact JSON. A response
  * settles before its `eventsAfter` microtask; `whenIdle` joins that tail.
@@ -354,12 +390,41 @@ export function createExactScriptedTransport<
 >(
   options: ExactScriptedTransportOptions<Request, Response, Event, Failure>,
 ): Result<ExactScriptedTransport<Response, Event, Failure>, ScriptedTransportDefinitionError> {
-  const limits = validateLimits(options.limits ?? DEFAULT_SCRIPTED_TRANSPORT_LIMITS);
+  let captured: CapturedScriptedTransportOptions<Request, Response, Event, Failure>;
+  try {
+    captured = Object.freeze({
+      wait: options.runtime.wait,
+      parseRequest: options.parseRequest,
+      parseResponse: options.parseResponse,
+      parseEvent: options.parseEvent,
+      parseFailure: options.parseFailure,
+      steps: options.steps,
+      beginActivity: options.activity?.begin,
+      activityNamespace: options.activityNamespace ?? "transport",
+      limits: options.limits ?? DEFAULT_SCRIPTED_TRANSPORT_LIMITS,
+      onListenerError: options.onListenerError,
+    });
+  } catch (reason) {
+    return err(definitionError(
+      "invalid-options",
+      renderUnknownReason(reason, "Scripted transport options could not be inspected"),
+    ));
+  }
+
+  let limits: Result<ScriptedTransportLimits, ScriptedTransportDefinitionError>;
+  try {
+    limits = validateLimits(captured.limits);
+  } catch (reason) {
+    return err(definitionError(
+      "invalid-options",
+      renderUnknownReason(reason, "Scripted transport limits could not be inspected"),
+    ));
+  }
   if (!limits.ok) return limits;
-  const parsedSteps = parseSteps(options, limits.value);
+  const parsedSteps = parseSteps(captured, limits.value);
   if (!parsedSteps.ok) return parsedSteps;
 
-  const listeners = new Set<(event: Event) => void>();
+  const listeners = new Set<ScriptedTransportListener<Event>>();
   const activeCancellations = new Set<() => void>();
   const disposalController = new AbortController();
   const internalErrors: string[] = [];
@@ -381,6 +446,16 @@ export function createExactScriptedTransport<
     idleWaiters = [];
     for (const resolve of waiting) resolve();
   };
+  const reportListenerError = (reason: unknown): void => {
+    if (captured.onListenerError === undefined) return;
+    try {
+      const returned: unknown = captured.onListenerError(reason);
+      const violation = synchronousReturnViolation(returned, "Scripted transport listener-error reporters");
+      if (violation !== null) recordInternalError(violation);
+    } catch (reporterReason) {
+      recordInternalError(reporterReason);
+    }
+  };
   const emit = (events: readonly Event[]): boolean => {
     if (disposed) return false;
     for (const event of events) {
@@ -388,14 +463,15 @@ export function createExactScriptedTransport<
       for (const listener of [...listeners]) {
         if (disposed) return false;
         try {
-          listener(event);
+          const returned: unknown = listener(event);
+          const violation = synchronousReturnViolation(returned, "Scripted transport listeners");
+          if (violation !== null) {
+            recordInternalError(violation);
+            reportListenerError(violation);
+          }
         } catch (reason) {
           recordInternalError(reason);
-          try {
-            options.onListenerError?.(reason);
-          } catch (reporterReason) {
-            recordInternalError(reporterReason);
-          }
+          reportListenerError(reason);
         }
       }
     }
@@ -431,9 +507,9 @@ export function createExactScriptedTransport<
     }
   };
   const beginLease = (): Result<CarapaceActivityLease | null, string> => {
-    if (options.activity === undefined) return ok(null);
+    if (captured.beginActivity === undefined) return ok(null);
     try {
-      const started = options.activity.begin(options.activityNamespace ?? "transport");
+      const started = captured.beginActivity(captured.activityNamespace);
       return started.ok
         ? ok(started.value)
         : err(renderUnknownReason(started.error, "Activity scope failed"));
@@ -459,8 +535,8 @@ export function createExactScriptedTransport<
       actual,
     ),
   }));
-  const dispose = (): void => {
-    if (disposed) return;
+  const dispose = (): undefined => {
+    if (disposed) return undefined;
     disposed = true;
     listeners.clear();
     for (const cancel of [...activeCancellations]) {
@@ -477,11 +553,12 @@ export function createExactScriptedTransport<
       recordInternalError(reason);
     }
     notifyIdle();
+    return undefined;
   };
 
   const request: ExactScriptedTransport<Response, Event, Failure>["request"] = (input) => {
     if (disposed) return Promise.resolve(disposedFailure());
-    const parsedRequest = parseAndCloneWorld(input, options.parseRequest);
+    const parsedRequest = parseAndCloneWorld(input, captured.parseRequest);
     if (!parsedRequest.ok) {
       if (disposed) return Promise.resolve(disposedFailure());
       return Promise.resolve(fail(currentError(
@@ -614,7 +691,7 @@ export function createExactScriptedTransport<
         }
         let waited: Result<number, RuntimeError>;
         try {
-          waited = await options.runtime.wait(step.delayMs, disposalController.signal);
+          waited = await captured.wait(step.delayMs, disposalController.signal);
         } catch (reason) {
           if (disposed) {
             cancel();
@@ -663,9 +740,10 @@ export function createExactScriptedTransport<
       listeners.add(listener);
       let active = true;
       return () => {
-        if (!active) return;
+        if (!active) return undefined;
         active = false;
         listeners.delete(listener);
+        return undefined;
       };
     },
     dispose,

@@ -3,13 +3,12 @@ import { defineCarapace } from "@cclrte/carapace";
 import {
   createDeviceStatusCarapaceWorld,
   parseDeviceStatusCarapaceWorld,
-  type DeviceStatusCarapaceWorld,
 } from "./world";
 
 export type DeviceStatusCarapaceRoute = "/";
 export type DeviceStatusViewport = "phone" | "tablet";
 
-const created = defineCarapace<DeviceStatusCarapaceWorld, DeviceStatusCarapaceRoute>({
+export const deviceStatusCarapaceDefinition = defineCarapace({
   parseWorld: parseDeviceStatusCarapaceWorld,
   defaultScenario: "ios-ready",
   scenarios: [
@@ -59,29 +58,22 @@ const created = defineCarapace<DeviceStatusCarapaceWorld, DeviceStatusCarapaceRo
       key: "device.status.ready",
       mode: "fixture",
       claim: "The real React Native screen renders successful iOS and Android status values.",
-      route: "/",
       scenarios: ["ios-ready", "android-dark"],
     },
     {
       key: "device.status.failure",
       mode: "fixture",
       claim: "The real React Native screen renders a declared device-inspection failure.",
-      route: "/",
       scenarios: ["inspection-failure"],
     },
     {
       key: "native.platform.direct",
       mode: "direct",
       claim: "React Native platform detection, appearance state, layout, and device rendering require direct native evidence.",
-      route: null,
       scenarios: [],
     },
   ],
 });
-
-if (!created.ok) throw new Error(created.error.message);
-
-export const deviceStatusCarapaceDefinition = created.value;
 
 export const deviceStatusScenarioMetadata: Readonly<Record<string, {
   readonly group: "Device" | "Failure";

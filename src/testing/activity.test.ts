@@ -71,6 +71,24 @@ describe("Carapace activity scope", () => {
     expect(store.getSnapshot().activity.active).toBe(0);
   });
 
+  test("run reports settlement failure after successful work resets the generation", async () => {
+    const { store, scope } = setup();
+    const result = await scope.run("request", () => {
+      const reset = store.reset({ count: 1, messages: [] });
+      if (!reset.ok) throw new Error(reset.error.message);
+      return 42;
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "settlement-failed",
+        workError: null,
+        activityError: { code: "store-settle-failed", storeError: { code: "stale-generation" } },
+      },
+    });
+    expect(store.getSnapshot().activity).toEqual({ active: 0, started: 0, settled: 0 });
+  });
+
   test("hostile thrown values cannot escape the Promise<Result> boundary", async () => {
     const { store, scope } = setup();
     const hostile = hostileThrownValue();
@@ -102,5 +120,44 @@ describe("Carapace activity scope", () => {
       error: { code: "operation-id-failed", operation: null },
     });
     expect(store.getSnapshot().activity).toEqual({ active: 0, started: 0, settled: 0 });
+  });
+
+  test("an aborted scope fences new and reentrant activity without leaking a lease", async () => {
+    const store = createCarapaceStore({ count: 0, messages: [] }, parseTestWorld);
+    if (!store.ok) throw new Error(store.error.message);
+    const controller = new AbortController();
+    const scope = createCarapaceActivityScope(
+      store.value,
+      createLogicalRuntime(undefined, () => Promise.resolve()),
+      { signal: controller.signal },
+    );
+
+    controller.abort();
+    const revision = store.value.getSnapshot().revision;
+    expect(scope.begin("late")).toMatchObject({ ok: false, error: { code: "scope-closed" } });
+    expect(await scope.run("late", () => 1)).toMatchObject({
+      ok: false,
+      error: { code: "begin-failed", activityError: { code: "scope-closed" } },
+    });
+    expect(store.value.getSnapshot()).toMatchObject({
+      revision,
+      activity: { active: 0, started: 0, settled: 0 },
+    });
+
+    const reentrantController = new AbortController();
+    const reentrantScope = createCarapaceActivityScope(
+      store.value,
+      createLogicalRuntime(undefined, () => Promise.resolve()),
+      { signal: reentrantController.signal },
+    );
+    const unsubscribe = store.value.subscribe(() => {
+      if (store.value.getSnapshot().activity.active === 1) reentrantController.abort();
+    });
+    expect(reentrantScope.begin("reentrant")).toMatchObject({
+      ok: false,
+      error: { code: "scope-closed" },
+    });
+    expect(store.value.getSnapshot().activity).toEqual({ active: 0, started: 1, settled: 1 });
+    unsubscribe();
   });
 });

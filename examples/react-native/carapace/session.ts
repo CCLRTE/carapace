@@ -3,25 +3,22 @@ import { createCarapaceSession } from "@cclrte/carapace/testing";
 import type { DeviceStatusPort } from "../src/device-status-port";
 import {
   deviceStatusCarapaceDefinition,
-  type DeviceStatusCarapaceRoute,
 } from "./definition";
 import { createDeterministicDeviceStatusPort } from "./deterministic-device-status-port";
-import type { DeviceStatusCarapaceWorld } from "./world";
 
 export interface DeviceStatusCarapaceHarness {
   readonly port: DeviceStatusPort;
   readonly pendingOperations: () => number;
   readonly blockedNetworkRequests: () => number;
   readonly recordBlockedNetworkRequest: () => void;
-  readonly remainingWork: () => unknown;
+  readonly remainingWork: () => {
+    readonly deviceStatus: { readonly pendingOperations: number };
+    readonly blockedNetworkRequests: number;
+  };
 }
 
 export function createDeviceStatusCarapaceSession(source: string) {
-  return createCarapaceSession<
-    DeviceStatusCarapaceWorld,
-    DeviceStatusCarapaceRoute,
-    DeviceStatusCarapaceHarness
-  >({
+  return createCarapaceSession({
     definition: deviceStatusCarapaceDefinition,
     activation: { kind: "query", source },
     create: (context): DeviceStatusCarapaceHarness => {

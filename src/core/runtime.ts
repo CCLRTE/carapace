@@ -4,6 +4,7 @@ import { renderUnknownReason } from "./reason.js";
 import { err, isRecord, ok, type Result } from "./result.js";
 
 export const LOGICAL_RUNTIME_SCHEMA = "carapace.runtime/v1" as const;
+export const MAX_HOST_TIMER_MILLISECONDS = 2_147_483_647;
 
 export interface LogicalRuntimeSnapshot {
   readonly schema: typeof LOGICAL_RUNTIME_SCHEMA;
@@ -87,7 +88,7 @@ export function parseLogicalRuntimeSnapshot(input: unknown): Result<LogicalRunti
   }));
 }
 
-function defaultSleep(wallMilliseconds: number, signal?: AbortSignal): Promise<void> {
+function sleepTimerChunk(wallMilliseconds: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     if (signal?.aborted === true) {
       resolve();
@@ -107,6 +108,15 @@ function defaultSleep(wallMilliseconds: number, signal?: AbortSignal): Promise<v
   });
 }
 
+async function defaultSleep(wallMilliseconds: number, signal?: AbortSignal): Promise<void> {
+  let remaining = wallMilliseconds;
+  while (remaining > 0 && signal?.aborted !== true) {
+    const chunk = Math.min(remaining, MAX_HOST_TIMER_MILLISECONDS);
+    await sleepTimerChunk(chunk, signal);
+    remaining -= chunk;
+  }
+}
+
 function parseDuration(logicalMilliseconds: number): Result<number, RuntimeError> {
   return Number.isSafeInteger(logicalMilliseconds) && logicalMilliseconds >= 0
     ? ok(logicalMilliseconds)
@@ -122,6 +132,13 @@ function waitCancelled(): Result<never, RuntimeError> {
     code: "wait-cancelled",
     message: "Logical wait was cancelled",
   });
+}
+
+function nextLogicalTime(nowMs: number, duration: number): Result<number, RuntimeError> {
+  const nextNow = nowMs + duration;
+  return Number.isSafeInteger(nextNow)
+    ? ok(nextNow)
+    : err({ code: "time-overflow", message: "Logical time exceeds the safe integer range" });
 }
 
 export function createLogicalRuntime(
@@ -149,11 +166,11 @@ export function createLogicalRuntime(
     if (!duration.ok) {
       return duration;
     }
-    const nextNow = nowMs + duration.value;
-    if (!Number.isSafeInteger(nextNow)) {
-      return err({ code: "time-overflow", message: "Logical time exceeds the safe integer range" });
+    const nextNow = nextLogicalTime(nowMs, duration.value);
+    if (!nextNow.ok) {
+      return nextNow;
     }
-    nowMs = nextNow;
+    nowMs = nextNow.value;
     return ok(nowMs);
   };
 
@@ -167,6 +184,8 @@ export function createLogicalRuntime(
     }
     const run = waitTail.then(async () => {
       if (isWaitCancelled(signal)) return waitCancelled();
+      const target = nextLogicalTime(nowMs, duration.value);
+      if (!target.ok) return target;
       const wallMilliseconds = Math.ceil(duration.value / acceleration);
       try {
         if (wallMilliseconds > 0) {

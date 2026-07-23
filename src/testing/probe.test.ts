@@ -5,6 +5,7 @@ import { createCarapaceStore } from "../core/store.js";
 import { parseTestWorld } from "../core/test-support.js";
 import {
   CARAPACE_PROBE_SCHEMA,
+  MAX_CARAPACE_PROBE_COUNTERS,
   createCarapaceProbe,
   parseCarapaceProbeSnapshot,
 } from "./probe.js";
@@ -48,6 +49,51 @@ describe("Carapace probe", () => {
       ...snapshot.value,
       surprise: true,
     })).toMatchObject({ ok: false, error: { code: "invalid-snapshot" } });
+  });
+
+  test("rejects snapshots impossible under store revision and generation conservation", () => {
+    const base = {
+      schema: CARAPACE_PROBE_SCHEMA,
+      activationHash: "wire-hash",
+      generation: 1,
+      revision: 0,
+      activity: { active: 0, started: 0, settled: 0 },
+      pending: {},
+      violations: {},
+      remainingWork: {},
+      isQuiescent: true,
+    };
+    expect(parseCarapaceProbeSnapshot({
+      ...base,
+      activity: { active: 1, started: 1, settled: 0 },
+      isQuiescent: false,
+    })).toMatchObject({ ok: false, error: { code: "invalid-snapshot" } });
+    expect(parseCarapaceProbeSnapshot({
+      ...base,
+      generation: 2,
+    })).toMatchObject({ ok: false, error: { code: "invalid-snapshot" } });
+  });
+
+  test("captures validated options instead of retaining mutable caller configuration", () => {
+    const store = storeFixture();
+    const options = { store, activationHash: "captured-hash" };
+    const probe = createCarapaceProbe(options);
+    if (!probe.ok) throw new Error(probe.error.message);
+
+    options.activationHash = "";
+    const otherStore = storeFixture();
+    const started = otherStore.beginActivity(otherStore.getSnapshot().generation, operationId("other-000001"));
+    if (!started.ok) throw new Error(started.error.message);
+    options.store = otherStore;
+
+    const snapshot = probe.value.snapshot();
+    expect(snapshot).toMatchObject({
+      ok: true,
+      value: { activationHash: "captured-hash", activity: { active: 0 } },
+    });
+    if (!snapshot.ok) throw new Error(snapshot.error.message);
+    expect(parseCarapaceProbeSnapshot(snapshot.value)).toEqual(snapshot);
+    expect(started.value.settle()).toMatchObject({ ok: true });
   });
 
   test("publishes a versioned JSON-safe snapshot with explicit quiescence gates", () => {
@@ -111,7 +157,7 @@ describe("Carapace probe", () => {
     const invalidDiagnostics = createCarapaceProbe({
       store,
       activationHash: "hash",
-      readRemainingWork: () => ({ value: undefined }),
+      readRemainingWork: (() => ({ value: undefined })) as unknown as () => never,
     });
     if (!invalidDiagnostics.ok) throw new Error(invalidDiagnostics.error.message);
     expect(invalidDiagnostics.value.snapshot()).toMatchObject({
@@ -126,6 +172,10 @@ describe("Carapace probe", () => {
       ok: false,
       error: { code: "invalid-activation-hash" },
     });
+    expect(createCarapaceProbe({
+      store,
+      activationHash: null as unknown as string,
+    })).toMatchObject({ ok: false, error: { code: "invalid-activation-hash" } });
     expect(createCarapaceProbe({
       store,
       activationHash: "hash",
@@ -175,5 +225,55 @@ describe("Carapace probe", () => {
         counter: null,
       },
     });
+  });
+
+  test("contains asynchronous counter and remaining-work rejections", async () => {
+    const store = storeFixture();
+    const counterProbe = createCarapaceProbe({
+      store,
+      activationHash: "async-counter",
+      pending: [{
+        name: "requests",
+        read: (() => Promise.reject(new Error("counter rejected"))) as unknown as () => number,
+      }],
+    });
+    if (!counterProbe.ok) throw new Error(counterProbe.error.message);
+    expect(counterProbe.value.snapshot()).toMatchObject({
+      ok: false,
+      error: { code: "asynchronous-read", counter: "requests" },
+    });
+
+    const remainingProbe = createCarapaceProbe({
+      store,
+      activationHash: "async-remaining",
+      readRemainingWork: (() => Promise.reject(new Error("remaining rejected"))) as unknown as () => never,
+    });
+    if (!remainingProbe.ok) throw new Error(remainingProbe.error.message);
+    expect(remainingProbe.value.snapshot()).toMatchObject({
+      ok: false,
+      error: { code: "asynchronous-read", counter: null },
+    });
+    await Promise.resolve();
+  });
+
+  test("rejects hostile counter definitions and the combined counter limit as Results", () => {
+    const store = storeFixture();
+    const hostile = Object.defineProperty({}, "name", {
+      get: () => { throw new Error("name getter failed"); },
+    });
+    expect(createCarapaceProbe({
+      store,
+      activationHash: "hostile-source",
+      pending: [hostile] as unknown as [],
+    })).toMatchObject({ ok: false, error: { code: "invalid-counter-source" } });
+
+    expect(createCarapaceProbe({
+      store,
+      activationHash: "too-many",
+      pending: Array.from({ length: MAX_CARAPACE_PROBE_COUNTERS + 1 }, (_, index) => ({
+        name: `counter${String(index)}`,
+        read: () => 0,
+      })),
+    })).toMatchObject({ ok: false, error: { code: "too-many-counters" } });
   });
 });

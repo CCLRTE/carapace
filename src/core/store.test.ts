@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { createCarapaceStore } from "./store.js";
 import { operationId } from "./ids.js";
-import { parseTestWorld } from "./test-support.js";
+import { parseTestWorld, type TestWorld } from "./test-support.js";
 
 function makeStore() {
   const created = createCarapaceStore({ count: 0, messages: [] }, parseTestWorld);
@@ -89,4 +89,109 @@ test("throwing subscribers cannot corrupt mutation results or starve later liste
   expect(healthyNotifications).toBe(1);
   expect(listenerErrors).toHaveLength(1);
   expect(listenerErrors[0]).toEqual(new Error("broken listener"));
+});
+
+test("a reset inside an updater fences the stale transaction before it can publish", () => {
+  const store = makeStore();
+  const initial = store.getSnapshot();
+
+  const result = store.transact(initial.generation, operationId("outer-000001"), (draft) => {
+    expect(store.reset({ count: 100, messages: ["reset"] }).ok).toBe(true);
+    draft.count = 1;
+  });
+
+  expect(result).toMatchObject({ ok: false, error: { code: "stale-generation" } });
+  expect(store.getSnapshot()).toMatchObject({
+    generation: Number(initial.generation) + 1,
+    revision: 1,
+    world: { count: 100, messages: ["reset"] },
+  });
+});
+
+test("a nested same-generation commit makes the outer transaction conflict", () => {
+  const store = makeStore();
+  const initial = store.getSnapshot();
+
+  const outer = store.transact(initial.generation, operationId("outer-000001"), (draft) => {
+    const inner = store.transact(initial.generation, operationId("inner-000001"), (innerDraft) => {
+      innerDraft.count = 2;
+    });
+    expect(inner).toMatchObject({ ok: true, value: { revision: 1 } });
+    draft.count = 1;
+  });
+
+  expect(outer).toMatchObject({ ok: false, error: { code: "transaction-conflict" } });
+  expect(store.getSnapshot()).toMatchObject({ revision: 1, world: { count: 2 } });
+});
+
+test("reentrant subscribers do not replace the snapshot returned by the commit", () => {
+  const store = makeStore();
+  const initial = store.getSnapshot();
+  let resetOnce = true;
+  store.subscribe(() => {
+    if (!resetOnce) return;
+    resetOnce = false;
+    expect(store.reset({ count: 99, messages: ["listener reset"] }).ok).toBe(true);
+  });
+
+  const committed = store.transact(initial.generation, operationId("outer-000001"), (draft) => {
+    draft.count = 1;
+  });
+
+  expect(committed).toMatchObject({
+    ok: true,
+    value: { generation: initial.generation, revision: 1, world: { count: 1 } },
+  });
+  expect(store.getSnapshot()).toMatchObject({
+    generation: Number(initial.generation) + 1,
+    revision: 2,
+    world: { count: 99, messages: ["listener reset"] },
+  });
+});
+
+test("transaction drafts never alias values returned by a world parser", () => {
+  const shared: TestWorld = { count: 0, messages: [] };
+  const parseSharedWorld = (input: unknown): TestWorld => {
+    const parsed = parseTestWorld(input);
+    if (!Number.isFinite(parsed.count)) throw new Error("count must be finite");
+    return shared;
+  };
+  const created = createCarapaceStore(shared, parseSharedWorld);
+  if (!created.ok) throw new Error(created.error.message);
+
+  const result = created.value.transact(
+    created.value.getSnapshot().generation,
+    operationId("alias-000001"),
+    (draft) => { draft.count = Number.NaN; },
+  );
+
+  expect(result).toMatchObject({ ok: false, error: { code: "invalid-world" } });
+  expect(shared.count).toBe(0);
+  expect(created.value.getSnapshot().world.count).toBe(0);
+});
+
+test("async subscriber failures are reported and option capture cannot be retargeted", async () => {
+  const firstErrors: unknown[] = [];
+  const secondErrors: unknown[] = [];
+  const mutableOptions = {
+    onListenerError: (reason: unknown): void => { firstErrors.push(reason); },
+  };
+  const created = createCarapaceStore({ count: 0, messages: [] }, parseTestWorld, mutableOptions);
+  if (!created.ok) throw new Error(created.error.message);
+  mutableOptions.onListenerError = (reason: unknown): void => { secondErrors.push(reason); };
+  created.value.subscribe(async () => {
+    await Promise.resolve();
+    throw new Error("async listener");
+  });
+
+  expect(created.value.transact(
+    created.value.getSnapshot().generation,
+    operationId("subscriber-000002"),
+    (draft) => { draft.count = 1; },
+  ).ok).toBe(true);
+  await Promise.resolve();
+  await Promise.resolve();
+
+  expect(firstErrors).toEqual([new Error("async listener")]);
+  expect(secondErrors).toEqual([]);
 });

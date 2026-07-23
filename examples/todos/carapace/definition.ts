@@ -4,12 +4,9 @@ import {
   createTodoCarapaceWorld,
   parseTodoCarapaceWorld,
   POPULATED_TODOS,
-  type TodoCarapaceWorld,
 } from "./world";
 
-export type TodoCarapaceRoute = "/";
-
-const created = defineCarapace<TodoCarapaceWorld, TodoCarapaceRoute>({
+export const todoCarapaceDefinition = defineCarapace({
   parseWorld: parseTodoCarapaceWorld,
   defaultScenario: "todos.populated",
   scenarios: [
@@ -43,33 +40,25 @@ const created = defineCarapace<TodoCarapaceWorld, TodoCarapaceRoute>({
       key: "todos.empty.render",
       mode: "fixture",
       claim: "The real todo interface renders an empty deterministic list.",
-      route: "/",
       scenarios: ["todos.empty"],
     },
     {
       key: "todos.completion",
       mode: "fixture",
       claim: "The real todo interface loads and completes tasks through the product-owned port.",
-      route: "/",
       scenarios: ["todos.populated"],
     },
     {
       key: "todos.write.failure",
       mode: "fixture",
       claim: "The real todo interface reports a declared persistence failure and retains loaded tasks.",
-      route: "/",
       scenarios: ["todos.write-failure"],
     },
     {
       key: "storage.local.direct",
       mode: "direct",
       claim: "Browser local-storage parsing, quota behavior, and persistence require direct production-adapter evidence.",
-      route: null,
       scenarios: [],
     },
   ],
 });
-
-if (!created.ok) throw new Error(created.error.message);
-
-export const todoCarapaceDefinition = created.value;

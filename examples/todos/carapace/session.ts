@@ -3,10 +3,8 @@ import { createCarapaceSession } from "@cclrte/carapace/testing";
 import type { TodoPort } from "../src/todo-port";
 import {
   todoCarapaceDefinition,
-  type TodoCarapaceRoute,
 } from "./definition";
 import { createDeterministicTodoPort } from "./deterministic-todo-port";
-import type { TodoCarapaceWorld } from "./world";
 
 export interface TodoCarapaceHarness {
   readonly port: TodoPort;
@@ -15,11 +13,15 @@ export interface TodoCarapaceHarness {
   readonly activityFailures: () => number;
   readonly recordBlockedNetworkRequest: () => void;
   readonly recordActivityFailure: () => void;
-  readonly remainingWork: () => unknown;
+  readonly remainingWork: () => {
+    readonly todo: { readonly pendingOperations: number };
+    readonly blockedNetworkRequests: number;
+    readonly activityFailures: number;
+  };
 }
 
 export function createTodoCarapaceSession(source: string) {
-  return createCarapaceSession<TodoCarapaceWorld, TodoCarapaceRoute, TodoCarapaceHarness>({
+  return createCarapaceSession({
     definition: todoCarapaceDefinition,
     activation: { kind: "query", source },
     create: (context): TodoCarapaceHarness => {

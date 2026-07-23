@@ -1,9 +1,9 @@
 # Contents
 
 - `src/core/` – product-neutral scenario, fixture, logical-time, store, effect, resource, and coverage contracts.
-- `src/testing/` – deterministic session, activity, probe, and exact scripted-transport utilities.
+- `src/testing/` – deterministic session, evidence, activity, probe, and exact scripted-transport utilities.
 - `src/react.ts` – opt-in React bindings for a Carapace store.
-- `src/web/` – opt-in browser bridge and fail-closed application-fetch firewall.
+- `src/web/` – atomic browser-session installation plus low-level bridge and fail-closed application-fetch firewall.
 - `docs/` – architecture, adoption, verification, and wire-format reference.
 - `examples/todos/` – runnable React example with separate production and Carapace entries.
 - `examples/react-native/` – runnable Expo example with platform-resolved native production and React Native Web Carapace entries.
@@ -18,6 +18,7 @@
 - Keep `.js` extensions on relative TypeScript import and export specifiers; the published source type surface must compile under both Bundler and NodeNext resolution.
 - Treat this repository as the complete project. Files and Git prose may use only its public names, paths, commands, and examples; do not refer to or infer any non-public source, system, product, package, path, or implementation detail.
 - Let each product own its semantic ports, strict versioned JSON world, deterministic adapters, scenarios, coverage claims, and workbench.
+- Prefer one validated definition, one owned session, and one atomic browser installation over assembling raw catalogs, stores, probes, and globals in each product.
 - Keep Carapace development-only. Production entries and emitted production assets must not import the package, fixture worlds, scenario catalogs, workbench code, or browser bridge.
 - Parse foreign input from `unknown`, reject unknown reserved keys and object fields, and preserve atomic store, generation-fencing, cancellation, and exact-script invariants.
 - Pair concrete behavior tests with property tests for parsers, round trips, ordering, resets, and cancellation.

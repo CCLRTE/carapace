@@ -1,5 +1,3 @@
-import { cloneJson, freezeJson } from "../core/json.js";
-import type { JsonValue } from "../core/json-value.js";
 import { renderUnknownReason } from "../core/reason.js";
 import { err, ok, type Result } from "../core/result.js";
 import {
@@ -7,23 +5,25 @@ import {
   parseCoverageCatalogSnapshot,
   type CoverageCatalogSnapshot,
 } from "../core/coverage.js";
-import type { CarapaceProbe, CarapaceProbeSnapshot } from "../testing/probe.js";
+import {
+  parseCarapaceProbeSnapshot,
+  type CarapaceProbe,
+  type CarapaceProbeSnapshot,
+} from "../testing/probe.js";
 
 export const CARAPACE_BROWSER_BRIDGE_SCHEMA = "carapace.browser-bridge/v1" as const;
 
 export interface CarapaceBrowserBridge {
   readonly schema: typeof CARAPACE_BROWSER_BRIDGE_SCHEMA;
   readonly snapshot: () => CarapaceProbeSnapshot;
-  readonly reset: () => void;
+  readonly reset: () => undefined;
   readonly coverage: CoverageCatalogSnapshot;
 }
 
 export interface CarapaceBrowserBridgeOptions {
   readonly probe: Pick<CarapaceProbe, "snapshot">;
   readonly coverage?: unknown;
-  readonly reset?: () => void;
-  /** Preserve a product's legacy flat activity shape while migrating automation. */
-  readonly legacyActivitySnapshot?: (snapshot: CarapaceProbeSnapshot) => unknown;
+  readonly reset?: () => undefined;
   readonly target?: object;
 }
 
@@ -34,20 +34,24 @@ export interface CarapaceBrowserBridgeError {
   readonly message: string;
 }
 
-export type CarapaceBrowserBridgeUninstall = () => void;
+export type CarapaceBrowserBridgeUninstall = () => undefined;
 
-const BRIDGE_KEYS = [
-  "__carapace",
-  "__carapaceActivitySnapshot",
-  "__carapaceReset",
-  "__carapaceCoverage",
-] as const;
+export interface PreparedCarapaceBrowserBridgeInstallation {
+  /** Make this provisional replacement the process owner. Cannot fail. */
+  readonly commit: () => undefined;
+  /** Restore the exact owner observed before preparation. */
+  readonly rollback: () => undefined;
+  /** Remove a committed replacement and restore its underlying owner. */
+  readonly uninstall: CarapaceBrowserBridgeUninstall;
+}
+
+const BRIDGE_KEYS = ["__carapace"] as const;
 
 interface ActiveBridgeInstallation {
   readonly target: object;
   readonly installed: ReadonlyMap<string, unknown>;
   readonly restore: ReadonlyMap<string, PropertyDescriptor | undefined>;
-  readonly deactivate: () => void;
+  readonly deactivate: () => undefined;
   readonly uninstall: CarapaceBrowserBridgeUninstall;
 }
 
@@ -60,9 +64,37 @@ function bridgeError(
   return Object.freeze({ code, message });
 }
 
-function defaultReset(): void {
-  const target = globalThis as typeof globalThis & { readonly location?: { readonly reload?: () => void } };
-  target.location?.reload?.();
+/** Consume a foreign thenable so a callback that lied about being synchronous cannot reject globally. */
+function containPromiseLike(value: unknown): boolean {
+  if ((typeof value !== "object" || value === null) && typeof value !== "function") return false;
+  let then: unknown;
+  try {
+    then = Reflect.get(value, "then");
+  } catch {
+    return false;
+  }
+  if (typeof then !== "function") return false;
+  try {
+    void Promise.resolve(value).catch(() => undefined);
+  } catch {
+    // Promise assimilation is a foreign boundary too. The callback remains contained.
+  }
+  return true;
+}
+
+function requireSynchronousResetResult(value: unknown): undefined {
+  containPromiseLike(value);
+  if (value !== undefined) {
+    throw new Error("Carapace reset must complete synchronously and return undefined");
+  }
+  return undefined;
+}
+
+function defaultReset(): undefined {
+  const target = globalThis as typeof globalThis & {
+    readonly location?: { readonly reload?: () => unknown };
+  };
+  return requireSynchronousResetResult(target.location?.reload?.());
 }
 
 function restoreDescriptor(target: object, key: string, descriptor: PropertyDescriptor | undefined): void {
@@ -87,13 +119,10 @@ function restoreInstalledValue(
   }
 }
 
-/**
- * Install one process-local browser automation bridge. A later installation
- * restores and replaces the earlier one; stale uninstall handles are harmless.
- */
-export function installCarapaceBrowserBridge(
+/** Prepare a reversible bridge replacement without deactivating the current owner. */
+export function prepareCarapaceBrowserBridgeInstallation(
   options: CarapaceBrowserBridgeOptions,
-): Result<CarapaceBrowserBridgeUninstall, CarapaceBrowserBridgeError> {
+): Result<PreparedCarapaceBrowserBridgeInstallation, CarapaceBrowserBridgeError> {
   let coverageInput: unknown;
   try {
     coverageInput = options.coverage === undefined
@@ -109,14 +138,12 @@ export function installCarapaceBrowserBridge(
   const coverage = parsedCoverage.value;
 
   let target: object;
-  let reset: () => void;
+  let reset: () => undefined;
   let probe: Pick<CarapaceProbe, "snapshot">;
-  let legacyActivitySnapshot: ((snapshot: CarapaceProbeSnapshot) => unknown) | undefined;
   try {
     target = options.target ?? globalThis;
     reset = options.reset ?? defaultReset;
     probe = options.probe;
-    legacyActivitySnapshot = options.legacyActivitySnapshot;
   } catch (reason) {
     return err(bridgeError(
       "install-failed",
@@ -124,12 +151,12 @@ export function installCarapaceBrowserBridge(
     ));
   }
   const previousInstallation = activeBridgeInstallation;
-  const rollback = new Map<string, PropertyDescriptor | undefined>();
+  const rollbackDescriptors = new Map<string, PropertyDescriptor | undefined>();
   const restore = new Map<string, PropertyDescriptor | undefined>();
   try {
     for (const key of BRIDGE_KEYS) {
       const descriptor = Object.getOwnPropertyDescriptor(target, key);
-      rollback.set(key, descriptor);
+      rollbackDescriptors.set(key, descriptor);
       const previousOwnsValue = previousInstallation?.target === target
         && descriptor?.value === previousInstallation.installed.get(key);
       restore.set(
@@ -146,37 +173,40 @@ export function installCarapaceBrowserBridge(
 
   const readSnapshot = (): CarapaceProbeSnapshot => {
     try {
-      const snapshot = probe.snapshot();
-      if (!snapshot.ok) throw new Error(renderUnknownReason(snapshot.error));
-      return snapshot.value;
+      const snapshot: unknown = probe.snapshot();
+      if (containPromiseLike(snapshot)) {
+        throw new Error("Carapace probe snapshots must complete synchronously");
+      }
+      if ((typeof snapshot !== "object" || snapshot === null) && typeof snapshot !== "function") {
+        throw new Error("Carapace probe returned an invalid result");
+      }
+      const succeeded: unknown = Reflect.get(snapshot, "ok");
+      if (succeeded !== true) {
+        if (succeeded === false) throw new Error(renderUnknownReason(Reflect.get(snapshot, "error")));
+        throw new Error("Carapace probe returned an invalid result");
+      }
+      const parsed = parseCarapaceProbeSnapshot(Reflect.get(snapshot, "value"));
+      if (!parsed.ok) throw new Error(parsed.error.message);
+      return parsed.value;
     } catch (reason) {
       throw new Error(`Carapace probe failed: ${renderUnknownReason(reason)}`);
     }
   };
-  const readLegacySnapshot = (): JsonValue => {
-    const canonical = readSnapshot();
-    let candidate: unknown;
+  const runReset = (): undefined => {
     try {
-      candidate = legacyActivitySnapshot === undefined ? canonical : legacyActivitySnapshot(canonical);
+      const returned: unknown = reset();
+      return requireSynchronousResetResult(returned);
     } catch (reason) {
-      throw new Error(`Carapace legacy snapshot failed: ${renderUnknownReason(reason)}`);
+      throw new Error(`Carapace reset failed: ${renderUnknownReason(reason)}`);
     }
-    const cloned = cloneJson(candidate);
-    if (!cloned.ok) throw new Error(`Carapace legacy snapshot is not JSON-safe: ${cloned.error.message}`);
-    return freezeJson(cloned.value);
   };
   const bridge: CarapaceBrowserBridge = Object.freeze({
     schema: CARAPACE_BROWSER_BRIDGE_SCHEMA,
     snapshot: readSnapshot,
-    reset,
+    reset: runReset,
     coverage,
   });
-  const installed = new Map<string, unknown>([
-    ["__carapace", bridge],
-    ["__carapaceActivitySnapshot", readLegacySnapshot],
-    ["__carapaceReset", reset],
-    ["__carapaceCoverage", coverage],
-  ]);
+  const installed = new Map<string, unknown>([["__carapace", bridge]]);
 
   try {
     for (const [key, value] of installed) {
@@ -189,7 +219,7 @@ export function installCarapaceBrowserBridge(
     }
   } catch (reason) {
     for (const key of BRIDGE_KEYS) {
-      restoreInstalledValue(target, key, installed.get(key), rollback.get(key));
+      restoreInstalledValue(target, key, installed.get(key), rollbackDescriptors.get(key));
     }
     return err(bridgeError(
       "install-failed",
@@ -197,30 +227,65 @@ export function installCarapaceBrowserBridge(
     ));
   }
 
-  let active = true;
+  let state: "prepared" | "committed" | "closed" = "prepared";
+  const rollback = (): undefined => {
+    if (state !== "prepared") return undefined;
+    state = "closed";
+    for (const key of BRIDGE_KEYS) {
+      restoreInstalledValue(target, key, installed.get(key), rollbackDescriptors.get(key));
+    }
+    return undefined;
+  };
+  const deactivate = (): undefined => {
+    if (state !== "committed") return undefined;
+    state = "closed";
+    if (activeBridgeInstallation === installation) activeBridgeInstallation = null;
+    return undefined;
+  };
+  const uninstall = (): undefined => {
+    if (state === "prepared") return rollback();
+    if (state !== "committed") return undefined;
+    state = "closed";
+    for (const key of BRIDGE_KEYS) {
+      restoreInstalledValue(target, key, installed.get(key), restore.get(key));
+    }
+    if (activeBridgeInstallation === installation) activeBridgeInstallation = null;
+    return undefined;
+  };
   const installation: ActiveBridgeInstallation = Object.freeze({
     target,
     installed,
     restore,
-    deactivate: (): void => {
-      if (!active) return;
-      active = false;
-      if (activeBridgeInstallation === installation) activeBridgeInstallation = null;
-    },
-    uninstall: (): void => {
-      if (!active) return;
-      active = false;
-      for (const key of BRIDGE_KEYS) {
-        restoreInstalledValue(target, key, installed.get(key), restore.get(key));
-      }
-      if (activeBridgeInstallation === installation) activeBridgeInstallation = null;
-    },
+    deactivate,
+    uninstall,
   });
+  const commit = (): undefined => {
+    if (state !== "prepared") return undefined;
+    state = "committed";
+    if (previousInstallation !== null) {
+      if (previousInstallation.target === target) previousInstallation.deactivate();
+      else previousInstallation.uninstall();
+    }
+    activeBridgeInstallation = installation;
+    return undefined;
+  };
 
-  if (previousInstallation !== null) {
-    if (previousInstallation.target === target) previousInstallation.deactivate();
-    else previousInstallation.uninstall();
-  }
-  activeBridgeInstallation = installation;
-  return ok(installation.uninstall);
+  return ok(Object.freeze({
+    commit,
+    rollback,
+    uninstall,
+  }));
+}
+
+/**
+ * Install one process-local browser automation bridge. A later installation
+ * restores and replaces the earlier one; stale uninstall handles are harmless.
+ */
+export function installCarapaceBrowserBridge(
+  options: CarapaceBrowserBridgeOptions,
+): Result<CarapaceBrowserBridgeUninstall, CarapaceBrowserBridgeError> {
+  const prepared = prepareCarapaceBrowserBridgeInstallation(options);
+  if (!prepared.ok) return prepared;
+  prepared.value.commit();
+  return ok(prepared.value.uninstall);
 }

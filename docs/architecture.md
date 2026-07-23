@@ -17,15 +17,13 @@ adapter            adapter
 
 Use the lowest port that preserves the behavior under review. A task interface should depend on a task repository, not a simulated database client. A desktop renderer should depend on a renderer-safe runtime transport, not a simulated native message protocol. The product owns request, response, event, and failure meanings.
 
-Carapace owns product-neutral mechanics:
+Carapace presents three public abstractions:
 
-- strict JSON values, world parsing, canonical fixtures, and activation;
-- serializable logical time and deterministic operation identifiers;
-- generation-fenced stores, atomic transactions, activity accounting, and effects;
-- scenario and fixture/mixed/direct coverage catalogs;
-- deterministic sessions, probes, and exact scripted transports;
-- optional React store bindings that work with React DOM and React Native; and
-- an optional browser bridge and fail-closed application-fetch firewall.
+- A **definition** validates the product's world parser, named scenarios, default activation, and `fixture`, `mixed`, or `direct` coverage claims. Use `defineCarapace` for authored configuration, `tryDefineCarapace` for typed configuration assembled dynamically, and `parseCarapaceDefinition` for a genuinely unknown value.
+- A **session** activates one scenario and owns its immutable world seed, logical clock, generation-fenced store, activity scope, product harness, probe, cancellation signal, coverage snapshot, and reverse-order cleanup.
+- A **browser installation** publishes one session through `window.__carapace` and optionally installs the fail-closed application-`fetch` firewall. Installation and rollback are atomic. The session registers its cleanup, and one disposable handle can remove both browser hooks earlier.
+
+React bindings and low-level deterministic mechanics remain available as escape hatches. They are not additional lifecycle owners.
 
 ## Treat the world as a seed
 
@@ -51,9 +49,9 @@ A clean marker scan is narrow evidence: the scanned files did not contain the co
 
 ## Keep optional surfaces isolated
 
-The default and `/core` exports do not import React or browser globals. React bindings live under `/react`, session and scripted test utilities under `/testing`, and browser globals under `/web`. The package runtime does not import React Native or Expo; the React Native example composes these existing surfaces from a platform-resolved web entry.
+The default `@cclrte/carapace` export is the curated definition and activation path. Advanced JSON, fixture, catalog, store, runtime, effect, and resource mechanics live under `@cclrte/carapace/core`. React bindings live under `@cclrte/carapace/react`, sessions and scripted test utilities under `@cclrte/carapace/testing`, and browser installation under `@cclrte/carapace/web`. None of the default, core, or testing surfaces imports React or browser globals. The package runtime does not import React Native or Expo; the React Native example composes these surfaces from a platform-resolved web entry.
 
-The fetch firewall intercepts application calls to the `fetch` function in its JavaScript realm. It does not intercept WebSockets, EventSource, navigation, asset loading, native calls, or traffic in another realm. Install it only in a Carapace browser entry.
+`installCarapaceBrowser` enables the fetch firewall by default. It intercepts application calls to `fetch` in its JavaScript realm and denies a request unless the product's allow predicate accepts its parsed URL. It does not intercept WebSockets, EventSource, navigation, asset loading, native calls, or traffic in another realm. Use it only in a Carapace browser entry. Pass `firewall: false` only when another checked boundary owns network containment.
 
 ## Resolve React Native compositions structurally
 

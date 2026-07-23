@@ -1,22 +1,19 @@
 import {
   DEFAULT_LOGICAL_RUNTIME_SNAPSHOT,
   parseLogicalRuntimeSnapshot
-} from "./index-avpdb8ge.js";
-import {
-  createCoverageCatalog
-} from "./index-ym9pc4q7.js";
+} from "./index-2mb8zsze.js";
 import {
   canonicalJson,
-  cloneJson,
   err,
-  freezeJson,
   isRecord,
   ok,
   parseAndCloneWorld,
+  parseExactJsonSource,
   parseScenarioId,
   stableHash,
   utf8ByteLength
-} from "./index-nv4eqpe5.js";
+} from "./index-xpkabpf3.js";
+
 // src/core/fixture.ts
 var FIXTURE_SCHEMA = "carapace.fixture/v1";
 var DEFAULT_MAX_FIXTURE_BYTES = 65536;
@@ -32,11 +29,12 @@ function maxFixtureBytes(value) {
   return maximum;
 }
 function parseFixtureEnvelope(input, options) {
+  const maximum = maxFixtureBytes(options.maxBytes);
   const serialized = canonicalJson(input);
   if (!serialized.ok) {
     return err(fixtureError("invalid-fixture", serialized.error.message));
   }
-  if (utf8ByteLength(serialized.value) > maxFixtureBytes(options.maxBytes)) {
+  if (utf8ByteLength(serialized.value) > maximum) {
     return err(fixtureError("oversized-fixture", "Fixture exceeds its byte limit"));
   }
   const foreign = JSON.parse(serialized.value);
@@ -70,25 +68,34 @@ function parseFixtureEnvelope(input, options) {
   if (!world.ok) {
     return err(fixtureError("invalid-world", world.error.message));
   }
-  return ok(Object.freeze({
+  const envelope = Object.freeze({
     schema: FIXTURE_SCHEMA,
     scenario: id.value,
     route: scenario.route,
     world: world.value,
     runtime: runtime.value
-  }));
+  });
+  const normalized = canonicalJson(envelope);
+  if (!normalized.ok) {
+    return err(fixtureError("invalid-fixture", normalized.error.message));
+  }
+  if (utf8ByteLength(normalized.value) > maximum) {
+    return err(fixtureError("oversized-fixture", "Normalized fixture exceeds its byte limit"));
+  }
+  return ok(envelope);
 }
 function parseFixtureJson(source, options) {
+  if (typeof source !== "string") {
+    return err(fixtureError("invalid-json", "Fixture JSON source must be a string"));
+  }
   if (utf8ByteLength(source) > maxFixtureBytes(options.maxBytes)) {
     return err(fixtureError("oversized-fixture", "Fixture exceeds its byte limit"));
   }
-  let input;
-  try {
-    input = JSON.parse(source);
-  } catch {
-    return err(fixtureError("invalid-json", "Fixture is not valid JSON"));
+  const input = parseExactJsonSource(source);
+  if (!input.ok) {
+    return err(fixtureError(input.error.code === "duplicate-key" ? "duplicate-key" : "invalid-json", input.error.code === "duplicate-key" ? input.error.message : "Fixture is not valid JSON"));
   }
-  return parseFixtureEnvelope(input, options);
+  return parseFixtureEnvelope(input.value, options);
 }
 function createFixtureEnvelope(input, options) {
   const id = parseScenarioId(input.scenario);
@@ -111,13 +118,23 @@ function serializeFixtureJson(input, options) {
   if (!fixture.ok)
     return fixture;
   const serialized = canonicalJson(fixture.value);
-  return serialized.ok ? ok(serialized.value) : err(fixtureError("invalid-fixture", serialized.error.message));
+  if (!serialized.ok) {
+    return err(fixtureError("invalid-fixture", serialized.error.message));
+  }
+  if (utf8ByteLength(serialized.value) > maxFixtureBytes(options.maxBytes)) {
+    return err(fixtureError("oversized-fixture", "Normalized fixture exceeds its byte limit"));
+  }
+  return ok(serialized.value);
 }
 
 // src/core/query.ts
 var SCENARIO_QUERY_KEY = "__carapace_scenario";
 var FIXTURE_QUERY_KEY = "__carapace_fixture";
-var DEFAULT_MAX_QUERY_BYTES = 98304;
+var FIXTURE_QUERY_PREFIX_BYTES = utf8ByteLength(`?${FIXTURE_QUERY_KEY}=`);
+function maximumFixtureQueryBytes(maxFixtureBytes2) {
+  return maxFixtureBytes2 * 3 + FIXTURE_QUERY_PREFIX_BYTES;
+}
+var DEFAULT_MAX_QUERY_BYTES = maximumFixtureQueryBytes(DEFAULT_MAX_FIXTURE_BYTES);
 function queryError(code, message) {
   return { code, message };
 }
@@ -208,6 +225,9 @@ function parseCarapaceQuery(source, options) {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
     throw new Error("Query maxQueryBytes must be a positive safe integer");
   }
+  if (typeof source !== "string") {
+    return err(queryError("invalid-query", "Carapace query source must be a string"));
+  }
   if (utf8ByteLength(source) > maxBytes) {
     return err(queryError("oversized-query", "Carapace query exceeds its byte limit"));
   }
@@ -256,6 +276,16 @@ function validText(value, maximum) {
   }
   return true;
 }
+function validRoute(value) {
+  if (value.trim().length === 0 || value.length > 256)
+    return false;
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code < 32 || code === 127)
+      return false;
+  }
+  return true;
+}
 function scenarioError(code, scenario, message) {
   return { code, scenario, message };
 }
@@ -276,7 +306,7 @@ function createScenarioCatalog(inputs, parseWorld) {
     if (input.description !== undefined && !validText(input.description, 2000)) {
       return err(scenarioError("invalid-description", id.value, "Scenario descriptions must contain 1-2000 visible characters"));
     }
-    if (!validText(input.route, 256)) {
+    if (!validRoute(input.route)) {
       return err(scenarioError("invalid-route", id.value, "Scenario routes must contain 1-256 visible characters"));
     }
     const runtime = parseLogicalRuntimeSnapshot(input.runtime ?? DEFAULT_LOGICAL_RUNTIME_SNAPSHOT);
@@ -314,115 +344,4 @@ function createScenarioCatalog(inputs, parseWorld) {
   }));
 }
 
-// src/core/definition.ts
-function definitionError(code, message, causes = {}) {
-  if (code === "invalid-scenarios" || code === "invalid-default-scenario") {
-    const scenarioError2 = causes.scenarioError;
-    if (scenarioError2 === undefined)
-      throw new Error(`${code} requires a scenario error`);
-    return Object.freeze({ code, message, scenarioError: scenarioError2, coverageError: null });
-  }
-  if (code === "invalid-coverage") {
-    const coverageError = causes.coverageError;
-    if (coverageError === undefined)
-      throw new Error("invalid-coverage requires a coverage error");
-    return Object.freeze({ code, message, scenarioError: null, coverageError });
-  }
-  return Object.freeze({ code, message, scenarioError: null, coverageError: null });
-}
-function validPositiveLimit(value) {
-  return Number.isSafeInteger(value) && value >= 1;
-}
-function activeFromParsed(parsed) {
-  if (!parsed.ok)
-    return parsed;
-  if (parsed.value.kind === "active")
-    return ok(parsed.value);
-  return err({ code: "invalid-scenario", message: "Carapace activation did not select a scenario" });
-}
-function defineCarapace(input) {
-  const maxFixtureBytes2 = input.maxFixtureBytes ?? DEFAULT_MAX_FIXTURE_BYTES;
-  const maxQueryBytes = input.maxQueryBytes ?? DEFAULT_MAX_QUERY_BYTES;
-  if (!validPositiveLimit(maxFixtureBytes2) || !validPositiveLimit(maxQueryBytes)) {
-    return err(definitionError("invalid-limits", "Carapace query and fixture limits must be positive safe integers"));
-  }
-  const scenarios = createScenarioCatalog(input.scenarios, input.parseWorld);
-  if (!scenarios.ok) {
-    return err(definitionError("invalid-scenarios", scenarios.error.message, {
-      scenarioError: scenarios.error
-    }));
-  }
-  const defaultScenario = scenarios.value.resolve(input.defaultScenario);
-  if (!defaultScenario.ok) {
-    return err(definitionError("invalid-default-scenario", defaultScenario.error.message, {
-      scenarioError: defaultScenario.error
-    }));
-  }
-  const coverage = createCoverageCatalog(input.coverage, scenarios.value);
-  if (!coverage.ok) {
-    return err(definitionError("invalid-coverage", coverage.error.message, {
-      coverageError: coverage.error
-    }));
-  }
-  const limits = Object.freeze({ maxFixtureBytes: maxFixtureBytes2, maxQueryBytes });
-  const fixtureOptions = Object.freeze({
-    scenarios: scenarios.value,
-    parseWorld: input.parseWorld,
-    maxBytes: maxFixtureBytes2
-  });
-  const queryOptions = Object.freeze({
-    ...fixtureOptions,
-    maxQueryBytes
-  });
-  const activateScenario = (scenario) => activateCarapaceScenario(scenario, scenarios.value);
-  const activate = (source) => {
-    const parsed = parseCarapaceQuery(source, queryOptions);
-    if (!parsed.ok || parsed.value.kind === "active")
-      return activeFromParsed(parsed);
-    return activateScenario(defaultScenario.value.id);
-  };
-  return ok(Object.freeze({
-    defaultScenario: defaultScenario.value,
-    scenarios: scenarios.value,
-    coverage: coverage.value,
-    parseWorld: input.parseWorld,
-    limits,
-    activate,
-    activateScenario,
-    parseFixture: (fixture) => parseFixtureEnvelope(fixture, fixtureOptions),
-    parseFixtureJson: (source) => parseFixtureJson(source, fixtureOptions),
-    createFixture: (fixture) => createFixtureEnvelope(fixture, fixtureOptions),
-    serializeFixture: (fixture) => serializeFixtureJson(fixture, fixtureOptions)
-  }));
-}
-// src/core/effects.ts
-function enqueueEffect(queue, id, effect, uses = 1) {
-  if (!Number.isSafeInteger(uses) || uses < 1) {
-    throw new Error("Queued effect uses must be a positive safe integer");
-  }
-  const cloned = cloneJson(effect);
-  if (!cloned.ok)
-    throw new Error(cloned.error.message);
-  const owned = freezeJson(cloned.value);
-  return Object.freeze([...queue, Object.freeze({ id, effect: owned, remaining: uses })]);
-}
-function consumeEffect(queue, matches = () => true) {
-  const index = queue.findIndex(matches);
-  if (index < 0) {
-    return { effect: null, queue };
-  }
-  const matched = queue[index];
-  if (matched === undefined) {
-    return { effect: null, queue };
-  }
-  const next = [...queue];
-  if (matched.remaining === 1) {
-    next.splice(index, 1);
-  } else {
-    next[index] = Object.freeze({ ...matched, remaining: matched.remaining - 1 });
-  }
-  return { effect: matched.effect, queue: Object.freeze(next) };
-}
-var enqueueFault = enqueueEffect;
-var consumeFault = consumeEffect;
-export { FIXTURE_SCHEMA, DEFAULT_MAX_FIXTURE_BYTES, parseFixtureEnvelope, parseFixtureJson, createFixtureEnvelope, serializeFixtureJson, SCENARIO_QUERY_KEY, FIXTURE_QUERY_KEY, DEFAULT_MAX_QUERY_BYTES, activateCarapaceScenario, parseCarapaceQuery, createScenarioCatalog, defineCarapace, enqueueEffect, consumeEffect, enqueueFault, consumeFault };
+export { FIXTURE_SCHEMA, DEFAULT_MAX_FIXTURE_BYTES, parseFixtureEnvelope, parseFixtureJson, createFixtureEnvelope, serializeFixtureJson, SCENARIO_QUERY_KEY, FIXTURE_QUERY_KEY, maximumFixtureQueryBytes, DEFAULT_MAX_QUERY_BYTES, activateCarapaceScenario, parseCarapaceQuery, createScenarioCatalog };

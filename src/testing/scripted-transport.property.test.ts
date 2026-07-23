@@ -4,6 +4,9 @@ import type { JsonObject } from "../core/json-value.js";
 import { isRecord } from "../core/result.js";
 
 import { createLogicalRuntime } from "../core/runtime.js";
+import { createCarapaceStore } from "../core/store.js";
+import { parseTestWorld } from "../core/test-support.js";
+import { createCarapaceActivityScope } from "./activity.js";
 import { DEFAULT_SCRIPTED_TRANSPORT_LIMITS, createExactScriptedTransport } from "./scripted-transport.js";
 
 interface IdRequest extends JsonObject {
@@ -11,8 +14,10 @@ interface IdRequest extends JsonObject {
 }
 
 function parseId(input: unknown): IdRequest {
-  if (!isRecord(input) || !Number.isSafeInteger(input.id)) throw new Error("Invalid id");
-  return { id: input.id as number };
+  if (!isRecord(input) || typeof input.id !== "number" || !Number.isSafeInteger(input.id)) {
+    throw new Error("Invalid id");
+  }
+  return { id: input.id };
 }
 
 function parseBoolean(input: unknown): boolean {
@@ -30,12 +35,15 @@ test("property: matching concurrent requests conserve steps, activity, and logic
     fc.array(fc.integer({ min: 0, max: 1_000 }), { maxLength: 40 }),
     async (delays) => {
       const runtime = createLogicalRuntime(undefined, () => Promise.resolve());
+      const store = createCarapaceStore({ count: 0, messages: [] }, parseTestWorld);
+      if (!store.ok) throw new Error(store.error.message);
       const transport = createExactScriptedTransport({
         runtime,
         parseRequest: parseId,
         parseResponse: parseBoolean,
         parseEvent: parseString,
         parseFailure: parseString,
+        activity: createCarapaceActivityScope(store.value, runtime),
         steps: delays.map((delayMs, id) => ({
           request: { id },
           outcome: { kind: "response", value: true },
@@ -44,12 +52,24 @@ test("property: matching concurrent requests conserve steps, activity, and logic
         })),
       });
       if (!transport.ok) throw new Error(transport.error.message);
-      const results = await Promise.all(delays.map((_delay, id) => transport.value.request({ id })));
+      const requests = delays.map((_delay, id) => transport.value.request({ id }));
+      expect(transport.value.pendingDeliveries()).toBe(delays.length);
+      expect(store.value.getSnapshot().activity).toEqual({
+        active: delays.length,
+        started: delays.length,
+        settled: 0,
+      });
+      const results = await Promise.all(requests);
       expect(results.every((result) => result.ok)).toBe(true);
       expect(await transport.value.whenIdle()).toEqual({ ok: true, value: true });
       expect(transport.value.assertDrained()).toEqual({ ok: true, value: true });
       expect(transport.value.pendingDeliveries()).toBe(0);
       expect(transport.value.remainingSteps()).toBe(0);
+      expect(store.value.getSnapshot().activity).toEqual({
+        active: 0,
+        started: delays.length,
+        settled: delays.length,
+      });
       expect(runtime.now()).toBe(delays.reduce((sum, delay) => sum + delay, 0));
     },
   ));
@@ -59,12 +79,16 @@ test("property: every invalid request is retained as a drain violation", async (
   await assertAsyncProperty(fc.asyncProperty(
     fc.array(fc.oneof(fc.string(), fc.double(), fc.boolean(), fc.constant(null)), { minLength: 1, maxLength: 40 }),
     async (invalidRequests) => {
+      const runtime = createLogicalRuntime(undefined, () => Promise.resolve());
+      const store = createCarapaceStore({ count: 0, messages: [] }, parseTestWorld);
+      if (!store.ok) throw new Error(store.error.message);
       const transport = createExactScriptedTransport({
-        runtime: createLogicalRuntime(undefined, () => Promise.resolve()),
+        runtime,
         parseRequest: parseId,
         parseResponse: parseBoolean,
         parseEvent: parseString,
         parseFailure: parseString,
+        activity: createCarapaceActivityScope(store.value, runtime),
         steps: [],
       });
       if (!transport.ok) throw new Error(transport.error.message);
@@ -73,6 +97,7 @@ test("property: every invalid request is retained as a drain violation", async (
       }
       expect(transport.value.violationCount()).toBe(invalidRequests.length);
       expect(transport.value.assertDrained()).toMatchObject({ ok: false, error: { code: "internal-failure" } });
+      expect(store.value.getSnapshot().activity).toEqual({ active: 0, started: 0, settled: 0 });
     },
   ));
 });

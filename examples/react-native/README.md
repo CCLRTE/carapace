@@ -44,4 +44,4 @@ The checked gate does not launch a browser or make semantic assertions against r
 
 This is fixture evidence. It does not exercise React Native platform detection, `Appearance`, native layout, Metro's host runtime, operating-system behavior, or a physical device. Those remain the `native.platform.direct` coverage claim. The iOS and Android scans prove that the emitted bundles selected the expected native composition and that their configured marker and source-map policies found no Carapace dependency.
 
-The example intentionally uses the existing `@cclrte/carapace/react`, `@cclrte/carapace/testing`, and `@cclrte/carapace/web` surfaces. React bindings already work with React Native, while the workbench, scenarios, product ports, and platform metadata belong to the app.
+The example defines its worlds and claims at the package root, creates one harness session through `@cclrte/carapace/testing`, and installs that session's bridge and fetch boundary atomically through `@cclrte/carapace/web`. React bindings already work with React Native, while the workbench, scenarios, product ports, and platform metadata belong to the app.

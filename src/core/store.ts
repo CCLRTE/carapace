@@ -27,6 +27,7 @@ export type StoreErrorCode =
   | "invalid-operation"
   | "invalid-world"
   | "stale-generation"
+  | "transaction-conflict"
   | "transaction-failed";
 
 export interface StoreError {
@@ -43,7 +44,7 @@ export interface TypedActivityLease<World extends JsonValue> {
 
 export interface CarapaceStore<World extends JsonValue> {
   readonly getSnapshot: () => CarapaceStoreSnapshot<World>;
-  readonly subscribe: (listener: () => void) => () => void;
+  readonly subscribe: (listener: () => void | PromiseLike<void>) => () => void;
   readonly transact: (
     generation: StoreGeneration,
     operation: OperationId,
@@ -90,6 +91,12 @@ function storeSnapshot<World extends JsonValue>(
   return Object.freeze({ generation: currentGeneration, revision, world, activity: currentActivity });
 }
 
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    (typeof value === "object" && value !== null) || typeof value === "function"
+  ) && typeof Reflect.get(value, "then") === "function";
+}
+
 export function createCarapaceStore<World extends JsonValue>(
   initialWorld: World,
   parseWorld: WorldParser<World>,
@@ -104,24 +111,37 @@ export function createCarapaceStore<World extends JsonValue>(
   let revision = 0;
   let currentActivity = activity(0, 0, 0);
   let snapshot = storeSnapshot(currentGeneration, revision, initial.value, currentActivity);
-  const listeners = new Set<() => void>();
+  const listeners = new Set<() => void | PromiseLike<void>>();
   const activeOperations = new Set<OperationId>();
+  const onListenerError = options.onListenerError;
+
+  const reportListenerError = (reason: unknown): void => {
+    if (onListenerError === undefined) return;
+    try {
+      const returned: unknown = onListenerError(reason);
+      if (isPromiseLike(returned)) {
+        void Promise.resolve(returned).catch(() => undefined);
+      }
+    } catch {
+      // A reporter is another listener boundary and cannot roll back committed state.
+    }
+  };
 
   const publish = (world: World = snapshot.world): CarapaceStoreSnapshot<World> => {
     revision += 1;
-    snapshot = storeSnapshot(currentGeneration, revision, world, currentActivity);
-    for (const listener of listeners) {
+    const committed = storeSnapshot(currentGeneration, revision, world, currentActivity);
+    snapshot = committed;
+    for (const listener of [...listeners]) {
       try {
-        listener();
-      } catch (reason) {
-        try {
-          options.onListenerError?.(reason);
-        } catch {
-          // A reporter is another listener boundary and cannot roll back committed state.
+        const returned: unknown = listener();
+        if (isPromiseLike(returned)) {
+          void Promise.resolve(returned).catch(reportListenerError);
         }
+      } catch (reason) {
+        reportListenerError(reason);
       }
     }
-    return snapshot;
+    return committed;
   };
 
   const stale = (expected: StoreGeneration, operation: OperationId | null = null): StoreError | null => (
@@ -166,7 +186,7 @@ export function createCarapaceStore<World extends JsonValue>(
 
   const store: CarapaceStore<World> = {
     getSnapshot: () => snapshot,
-    subscribe: (listener: () => void) => {
+    subscribe: (listener: () => void | PromiseLike<void>) => {
       listeners.add(listener);
       return () => {
         listeners.delete(listener);
@@ -181,13 +201,16 @@ export function createCarapaceStore<World extends JsonValue>(
       if (staleError !== null) {
         return err(staleError);
       }
+      const baseSnapshot = snapshot;
       const cloned = cloneJson(snapshot.world);
       if (!cloned.ok) {
         return err(storeError("invalid-world", cloned.error.message, operation.value));
       }
       let candidateWorld: World;
       try {
-        const draft = parseWorld(cloned.value);
+        // The current snapshot already passed parseWorld. Its JSON clone is an
+        // owned mutable draft and cannot alias a value returned by the parser.
+        const draft = cloned.value as World;
         const returned = update(draft);
         candidateWorld = returned === undefined ? draft : returned;
       } catch (reason) {
@@ -196,6 +219,17 @@ export function createCarapaceStore<World extends JsonValue>(
       const validated = parseAndCloneWorld(candidateWorld, parseWorld);
       if (!validated.ok) {
         return err(storeError("invalid-world", validated.error.message, operation.value));
+      }
+      const nextStaleError = stale(expected, operation.value);
+      if (nextStaleError !== null) {
+        return err(nextStaleError);
+      }
+      if (snapshot !== baseSnapshot) {
+        return err(storeError(
+          "transaction-conflict",
+          `Store revision changed during transaction ${operation.value}`,
+          operation.value,
+        ));
       }
       return ok(publish(validated.value));
     },

@@ -4,9 +4,9 @@
 - `definition.ts` – stable scenarios, viewport metadata, and fixture/direct coverage catalog.
 - `deterministic-device-status-port.ts` – logical-time, activity-accounted implementation of the product port.
 - `session.ts` – activation, store, cancellation, probe counters, and cleanup composition.
-- `mount.ts` – effect-owned browser bridge, fetch firewall, session installation, and idempotent teardown.
+- `mount.ts` – effect-owned canonical browser installation and session-owned idempotent teardown.
 - `workbench.tsx` – React Native Web scenario navigation and phone/tablet frame.
-- `web-provider.tsx` – fail-closed activation, fetch firewall, canonical browser bridge, and real-screen composition.
+- `web-provider.tsx` – fail-closed activation and real-screen composition over a mounted Carapace session.
 - `check-native-boundary.ts` – emitted iOS and Android entry, source-map, and marker scanner.
 - `*.test.ts` and `*.property.test.ts` – parser, definition, adapter, lifecycle, and scanner evidence.
 

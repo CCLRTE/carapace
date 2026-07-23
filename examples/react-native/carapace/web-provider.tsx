@@ -26,7 +26,7 @@ function ActiveComposition({ session }: { readonly session: DeviceStatusSession 
   return (
     <carapaceReact.Provider store={session.store}>
       <DeviceStatusWorkbench activation={session.activation}>
-        <DeviceStatusApp port={session.product.port} />
+        <DeviceStatusApp port={session.harness.port} />
       </DeviceStatusWorkbench>
     </carapaceReact.Provider>
   );

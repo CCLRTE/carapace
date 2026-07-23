@@ -4,7 +4,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "vite";
 
-import { scanTodoProductionOutput } from "./carapace/check-production-boundary";
+import {
+  scanTodoCarapaceOutput,
+  scanTodoProductionOutput,
+} from "./carapace/check-production-boundary";
 
 const exampleRoot = dirname(fileURLToPath(import.meta.url));
 
@@ -38,10 +41,12 @@ async function verifyTodoExample(): Promise<void> {
         outDir: carapaceOutput,
       },
     });
+    const carapaceBoundary = await scanTodoCarapaceOutput(carapaceOutput);
 
     console.log([
       `Todo production boundary passed (${String(boundary.scanned.length)} files).`,
-      "Production and Carapace entries built in an isolated temporary directory.",
+      `Todo Carapace boundary passed (${String(carapaceBoundary.scanned.length)} files).`,
+      "Production and Carapace source graphs were proved in an isolated temporary directory.",
     ].join("\n"));
   } finally {
     await rm(temporaryRoot, { force: true, recursive: true });

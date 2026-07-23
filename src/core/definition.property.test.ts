@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { assertProperty, fc } from "./test-support.js";
 
-import { defineCarapace } from "./definition.js";
-import { parseTestWorld, type TestRoute, type TestWorld } from "./test-support.js";
+import { defineCarapace, parseCarapaceDefinition } from "./definition.js";
+import { FIXTURE_QUERY_KEY } from "./query.js";
+import { parseTestWorld } from "./test-support.js";
 
-const created = defineCarapace<TestWorld, TestRoute>({
+const created = defineCarapace({
   parseWorld: parseTestWorld,
   defaultScenario: "chat.empty",
   scenarios: [{
@@ -15,8 +16,6 @@ const created = defineCarapace<TestWorld, TestRoute>({
   }],
   coverage: [],
 });
-if (!created.ok) throw new Error(created.error.message);
-
 describe("Carapace definition properties", () => {
   test("unreserved query parameters cannot perturb the default activation", () => {
     assertProperty(fc.property(
@@ -26,7 +25,7 @@ describe("Carapace definition properties", () => {
       ), { maxLength: 12 }),
       (entries) => {
         const query = new URLSearchParams(entries).toString();
-        const activation = created.value.activate(query);
+        const activation = created.activate(query);
         expect(activation).toMatchObject({
           ok: true,
           value: { scenario: "chat.empty", source: "scenario" },
@@ -37,7 +36,38 @@ describe("Carapace definition properties", () => {
 
   test("foreign scenario identifiers never throw", () => {
     assertProperty(fc.property(fc.anything(), (candidate) => {
-      expect(() => created.value.activateScenario(candidate)).not.toThrow();
+      expect(() => created.activateScenario(candidate)).not.toThrow();
     }));
+  });
+
+  test("foreign definition values never escape the fallible boundary", () => {
+    assertProperty(fc.property(fc.anything(), (candidate) => {
+      expect(() => parseCarapaceDefinition(candidate)).not.toThrow();
+    }));
+  });
+
+  test("every serialized fixture within the default bound activates through its encoded query", () => {
+    assertProperty(fc.property(
+      fc.integer(),
+      fc.array(fc.string({ maxLength: 64 }), { maxLength: 50 }),
+      (count, messages) => {
+        const serialized = created.serializeFixture({
+          scenario: "chat.empty",
+          world: { count, messages },
+        });
+        if (!serialized.ok) throw new Error(serialized.error.message);
+
+        expect(created.activate(
+          `?${FIXTURE_QUERY_KEY}=${encodeURIComponent(serialized.value)}`,
+        )).toMatchObject({
+          ok: true,
+          value: {
+            source: "fixture",
+            scenario: "chat.empty",
+            world: { count, messages },
+          },
+        });
+      },
+    ));
   });
 });

@@ -27,16 +27,18 @@ Reject a design that conditionally imports fixtures from a query string, build f
 
 1. Define one bounded JSON world with a literal version.
 2. Parse it from `unknown`; reject unknown keys, unsupported versions, duplicate identifiers, inconsistent states, and exceeded bounds.
-3. Call `defineCarapace` with a validated default, stable scenario IDs, and exact `fixture`, `mixed`, or `direct` coverage entries.
+3. Call `defineCarapace` with a validated default, stable scenario IDs, and exact `fixture`, `mixed`, or `direct` coverage entries. Authored invalid configuration should fail during startup. Use `tryDefineCarapace` for typed configuration assembled dynamically and `parseCarapaceDefinition` for genuinely unknown configuration.
 4. Implement deterministic adapters for the same product ports. Use logical time for product delays and activity scopes for asynchronous work.
 5. Use exact scripts only when request or event order is part of the claim. Keep arbitrary valid interactive behavior stateful in the product adapter.
-6. Call `createCarapaceSession` to own activation, store, clock, activity, product construction, probe observation, cancellation, and reverse-order cleanup.
+6. Call `createCarapaceSession` to own activation, store, clock, activity, harness construction, probe observation, the validated coverage snapshot, cancellation, and reverse-order cleanup.
 
 Treat the shared world store as a scenario seed and activity ledger. Let product adapters own mutable repositories or event streams after construction.
 
+A scenario contains initial world, route, and optional logical-runtime state. Product-verifier actions, semantic assertions, and evidence policy do not belong in the scenario catalog.
+
 ## Add the development entry
 
-Render the real product interface with deterministic adapters. Install the browser bridge and fail-closed application-fetch firewall only in a browser Carapace entry. Expose the validated coverage list and count blocked requests, unexpected calls, leaked work, and malformed scripts as named violations.
+Render the real product interface with deterministic adapters from `session.harness`. Call `installCarapaceBrowser({ session })` only in a browser Carapace entry. It atomically publishes the canonical bridge and session coverage snapshot, installs the fail-closed application-fetch firewall by default, tracks fetch work in the session activity scope, and registers cleanup with the session. Configure blocked-request and activity-error observers as named violations. Pass `firewall: false` only when another checked boundary owns network containment.
 
 Display activation failures. Never fall back from malformed explicit activation to a nearby valid scenario.
 

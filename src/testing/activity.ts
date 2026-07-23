@@ -11,6 +11,13 @@ import { err, ok, type Result } from "../core/result.js";
 
 export type CarapaceActivityScopeError =
   | {
+    readonly code: "scope-closed";
+    readonly message: string;
+    readonly operation: null;
+    readonly storeError: null;
+    readonly reason: null;
+  }
+  | {
     readonly code: "operation-id-failed";
     readonly message: string;
     readonly operation: null;
@@ -71,6 +78,11 @@ export interface CarapaceActivityScope {
   ) => Promise<Result<Value, CarapaceActivityRunError>>;
 }
 
+export interface CarapaceActivityScopeOptions {
+  /** Fence new activity once the owning composition has been aborted. */
+  readonly signal?: AbortSignal;
+}
+
 function storeErrorMessage(cause: StoreError): string {
   return renderUnknownReason(cause, "Carapace store operation failed");
 }
@@ -82,6 +94,16 @@ function operationError(reason: unknown): CarapaceActivityScopeError {
     operation: null,
     storeError: null,
     reason,
+  });
+}
+
+function closedScopeError(): CarapaceActivityScopeError {
+  return Object.freeze({
+    code: "scope-closed",
+    message: "The Carapace activity scope is closed",
+    operation: null,
+    storeError: null,
+    reason: null,
   });
 }
 
@@ -106,19 +128,30 @@ function storeError(
 export function createCarapaceActivityScope<World extends JsonValue>(
   store: CarapaceStore<World>,
   runtime: LogicalRuntime,
+  options: CarapaceActivityScopeOptions = {},
 ): CarapaceActivityScope {
+  const signal = options.signal;
+  const isClosed = (): boolean => signal?.aborted === true;
   const begin = (namespace = "activity"): Result<CarapaceActivityLease, CarapaceActivityScopeError> => {
+    if (isClosed()) return err(closedScopeError());
     let operation: OperationId;
     try {
       operation = runtime.nextOperationId(namespace);
     } catch (reason) {
       return err(operationError(reason));
     }
+    if (isClosed()) return err(closedScopeError());
 
     const currentGeneration = store.getSnapshot().generation;
     const started = store.beginActivity(currentGeneration, operation);
     if (!started.ok) {
       return err(storeError("store-begin-failed", operation, started.error));
+    }
+    if (isClosed()) {
+      const settled = started.value.settle();
+      return settled.ok
+        ? err(closedScopeError())
+        : err(storeError("store-settle-failed", operation, settled.error));
     }
 
     let released = false;

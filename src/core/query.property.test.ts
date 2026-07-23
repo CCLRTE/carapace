@@ -1,15 +1,26 @@
 import { expect, test } from "bun:test";
 import { assertProperty, fc } from "./test-support.js";
-import { SCENARIO_QUERY_KEY, parseCarapaceQuery } from "./query.js";
+import { utf8ByteLength } from "./json.js";
+import {
+  FIXTURE_QUERY_KEY,
+  SCENARIO_QUERY_KEY,
+  maximumFixtureQueryBytes,
+  parseCarapaceQuery,
+} from "./query.js";
 import { parseFixtureEnvelope, parseFixtureJson, serializeFixtureJson } from "./fixture.js";
 import { parseTestWorld, testScenarios } from "./test-support.js";
 
 test("property: query and fixture parsers are total over arbitrary input", () => {
-  assertProperty(fc.property(fc.string(), fc.anything({ withBigInt: true }), (query, fixture) => {
-    const options = { scenarios: testScenarios(), parseWorld: parseTestWorld };
-    expect(() => parseCarapaceQuery(query, options)).not.toThrow();
-    expect(() => parseFixtureEnvelope(fixture, options)).not.toThrow();
-  }));
+  assertProperty(fc.property(
+    fc.anything({ withBigInt: true }),
+    fc.anything({ withBigInt: true }),
+    (query, fixture) => {
+      const options = { scenarios: testScenarios(), parseWorld: parseTestWorld };
+      expect(() => parseCarapaceQuery(query, options)).not.toThrow();
+      expect(() => parseFixtureEnvelope(fixture, options)).not.toThrow();
+      expect(() => parseFixtureJson(query, options)).not.toThrow();
+    },
+  ));
 });
 
 test("property: duplicate activation parameters are rejected regardless of their values", () => {
@@ -40,4 +51,16 @@ test("property: created fixtures survive their canonical JSON round trip", () =>
       ));
     },
   ));
+});
+
+test("property: the query bound covers worst-case percent encoding of JSON text", () => {
+  assertProperty(fc.property(fc.jsonValue(), (value) => {
+    const source = JSON.stringify(value);
+    if (source === undefined) throw new Error("JSON values must serialize");
+    const query = `?${FIXTURE_QUERY_KEY}=${encodeURIComponent(source)}`;
+
+    expect(utf8ByteLength(query)).toBeLessThanOrEqual(
+      maximumFixtureQueryBytes(utf8ByteLength(source)),
+    );
+  }));
 });

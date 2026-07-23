@@ -1,11 +1,21 @@
 import { describe, expect, test } from "bun:test";
 
-import { defineCarapace } from "./definition.js";
-import { SCENARIO_QUERY_KEY } from "./query.js";
+import {
+  defineCarapace,
+  parseCarapaceDefinition,
+  tryDefineCarapace,
+} from "./definition.js";
+import { DEFAULT_MAX_FIXTURE_BYTES } from "./fixture.js";
+import { utf8ByteLength } from "./json.js";
+import {
+  DEFAULT_MAX_QUERY_BYTES,
+  FIXTURE_QUERY_KEY,
+  SCENARIO_QUERY_KEY,
+} from "./query.js";
 import { parseTestWorld, type TestRoute, type TestWorld } from "./test-support.js";
 
 function definition() {
-  return defineCarapace<TestWorld, TestRoute>({
+  return defineCarapace({
     parseWorld: parseTestWorld,
     defaultScenario: "chat.empty",
     scenarios: [
@@ -27,21 +37,143 @@ function definition() {
         key: "chat.empty",
         mode: "fixture",
         claim: "The empty chat state renders",
-        route: "/chat",
         scenarios: ["chat.empty"],
       },
     ],
   });
 }
 
+function authoredTypeContracts(): void {
+  defineCarapace({
+    parseWorld: parseTestWorld,
+    // @ts-expect-error Authored defaults must name a scenario in the same definition.
+    defaultScenario: "chat.missing",
+    scenarios: [{
+      id: "chat.empty",
+      title: "Empty chat",
+      route: "/chat",
+      world: { count: 0, messages: [] },
+    }],
+    coverage: [],
+  });
+  defineCarapace({
+    parseWorld: parseTestWorld,
+    defaultScenario: "chat.empty",
+    scenarios: [{
+      id: "chat.empty",
+      title: "Empty chat",
+      route: "/chat",
+      world: { count: 0, messages: [] },
+    }],
+    coverage: [{
+      key: "chat.missing",
+      mode: "fixture",
+      claim: "A missing scenario cannot prove this claim",
+      // @ts-expect-error Authored coverage must cite a scenario in the same definition.
+      scenarios: ["chat.missing"],
+    }],
+  });
+  defineCarapace({
+    parseWorld: parseTestWorld,
+    defaultScenario: "chat.empty",
+    scenarios: [{
+      id: "chat.empty",
+      title: "Empty chat",
+      route: "/chat",
+      world: { count: 0, messages: [] },
+    }],
+    coverage: [{
+      key: "chat.route",
+      mode: "fixture",
+      claim: "Coverage resolves routes through cited scenarios",
+      // @ts-expect-error Coverage must not duplicate a singular scenario route.
+      route: "/chat",
+      scenarios: ["chat.empty"],
+    }],
+  });
+  defineCarapace({
+    parseWorld: parseTestWorld,
+    defaultScenario: "chat.empty",
+    scenarios: [{
+      id: "chat.empty",
+      title: "Empty chat",
+      route: "/chat",
+      world: { count: 0, messages: [] },
+    }],
+    coverage: [
+      {
+        key: "native.direct",
+        mode: "direct",
+        claim: "The native host requires direct evidence",
+        // @ts-expect-error Direct evidence cannot cite deterministic scenarios.
+        scenarios: ["chat.empty"],
+      },
+    ],
+  });
+  defineCarapace({
+    parseWorld: parseTestWorld,
+    defaultScenario: "chat.empty",
+    scenarios: [{
+      id: "chat.empty",
+      title: "Empty chat",
+      route: "/chat",
+      world: { count: 0, messages: [] },
+    }],
+    coverage: [
+      // @ts-expect-error Fixture evidence must cite at least one scenario.
+      {
+        key: "chat.fixture",
+        mode: "fixture",
+        claim: "The fixture renders",
+        scenarios: [],
+      },
+    ],
+  });
+}
+void authoredTypeContracts;
+
 describe("Carapace definition", () => {
+  test("parses a genuinely unknown definition without asserting it into an owned type", () => {
+    const input: unknown = {
+      parseWorld: parseTestWorld,
+      defaultScenario: "chat.empty",
+      scenarios: [{
+        id: "chat.empty",
+        title: "Empty chat",
+        route: "/chat",
+        world: { count: 0, messages: [] },
+      }],
+      coverage: [{
+        key: "chat.empty",
+        mode: "fixture",
+        claim: "The empty chat state renders",
+        scenarios: ["chat.empty"],
+      }],
+    };
+    const parsed = parseCarapaceDefinition(input);
+    if (!parsed.ok) throw new Error(parsed.error.message);
+    expect(parsed.value.activate("")).toMatchObject({
+      ok: true,
+      value: { scenario: "chat.empty", route: "/chat", world: { count: 0 } },
+    });
+
+    const hostile = new Proxy({}, {
+      get: () => {
+        throw new Error("foreign definition getter failed");
+      },
+    });
+    expect(parseCarapaceDefinition(hostile)).toMatchObject({
+      ok: false,
+      error: { code: "invalid-options", message: "foreign definition getter failed" },
+    });
+  });
+
   test("validates configuration once and activates the default for an empty query", () => {
     const created = definition();
-    if (!created.ok) throw new Error(created.error.message);
 
-    expect(String(created.value.defaultScenario.id)).toBe("chat.empty");
-    expect(created.value.coverage.keys().map(String)).toEqual(["chat.empty"]);
-    expect(created.value.activate("?tab=recent")).toMatchObject({
+    expect(String(created.defaultScenario.id)).toBe("chat.empty");
+    expect(created.coverage.keys().map(String)).toEqual(["chat.empty"]);
+    expect(created.activate("?tab=recent")).toMatchObject({
       ok: true,
       value: {
         kind: "active",
@@ -55,20 +187,19 @@ describe("Carapace definition", () => {
 
   test("keeps explicit activation fail-closed instead of falling back", () => {
     const created = definition();
-    if (!created.ok) throw new Error(created.error.message);
 
-    expect(created.value.activateScenario("settings.ready")).toMatchObject({
+    expect(created.activateScenario("settings.ready")).toMatchObject({
       ok: true,
       value: { scenario: "settings.ready", route: "/settings" },
     });
-    expect(created.value.activate(`?${SCENARIO_QUERY_KEY}=missing`)).toMatchObject({
+    expect(created.activate(`?${SCENARIO_QUERY_KEY}=missing`)).toMatchObject({
       ok: false,
       error: { code: "unknown-scenario" },
     });
   });
 
   test("rejects an unknown default and coverage drift", () => {
-    const unknownDefault = defineCarapace<TestWorld, TestRoute>({
+    const unknownDefault = tryDefineCarapace<TestWorld, TestRoute>({
       parseWorld: parseTestWorld,
       defaultScenario: "missing",
       scenarios: [{
@@ -84,7 +215,7 @@ describe("Carapace definition", () => {
       error: { code: "invalid-default-scenario" },
     });
 
-    const unknownCoverageScenario = defineCarapace<TestWorld, TestRoute>({
+    const unknownCoverageScenario = tryDefineCarapace<TestWorld, TestRoute>({
       parseWorld: parseTestWorld,
       defaultScenario: "chat.empty",
       scenarios: [{
@@ -97,7 +228,6 @@ describe("Carapace definition", () => {
         key: "chat.ready",
         mode: "fixture",
         claim: "Ready chat renders",
-        route: "/chat",
         scenarios: ["chat.ready"],
       }],
     });
@@ -105,10 +235,29 @@ describe("Carapace definition", () => {
       ok: false,
       error: { code: "invalid-coverage", coverageError: { code: "unknown-scenario" } },
     });
+
+    try {
+      defineCarapace({
+        parseWorld: parseTestWorld,
+        // Deliberately bypass the authored type law to verify the runtime boundary.
+        defaultScenario: "missing" as "chat.empty",
+        scenarios: [{
+          id: "chat.empty",
+          title: "Empty chat",
+          route: "/chat",
+          world: { count: 0, messages: [] },
+        }],
+        coverage: [],
+      });
+      throw new Error("Invalid authored definition unexpectedly succeeded");
+    } catch (reason) {
+      expect(reason).toBeInstanceOf(Error);
+      expect((reason as Error).cause).toMatchObject({ code: "invalid-default-scenario" });
+    }
   });
 
   test("rejects invalid activation limits before accepting the definition", () => {
-    const created = defineCarapace<TestWorld, TestRoute>({
+    const created = tryDefineCarapace<TestWorld, TestRoute>({
       parseWorld: parseTestWorld,
       defaultScenario: "chat.empty",
       scenarios: [{
@@ -124,7 +273,38 @@ describe("Carapace definition", () => {
   });
 
   test("freezes limits and binds fixture parsing, creation, and serialization to them", () => {
-    const created = defineCarapace<TestWorld, TestRoute>({
+    const created = defineCarapace({
+      parseWorld: parseTestWorld,
+      defaultScenario: "chat.empty",
+      scenarios: [{
+        id: "chat.empty",
+        title: "Empty chat",
+        route: "/chat",
+        world: { count: 0, messages: [] },
+      }],
+      coverage: [],
+      maxFixtureBytes: 256,
+      maxQueryBytes: 1_024,
+    });
+    expect(created.limits).toEqual({ maxFixtureBytes: 256, maxQueryBytes: 1_024 });
+    expect(Object.isFrozen(created.limits)).toBeTrue();
+    const serialized = created.serializeFixture({
+      scenario: "chat.empty",
+      world: { count: 1, messages: ["portable"] },
+    });
+    if (!serialized.ok) throw new Error(serialized.error.message);
+    expect(created.parseFixtureJson(serialized.value)).toMatchObject({
+      ok: true,
+      value: { scenario: "chat.empty", route: "/chat", world: { count: 1 } },
+    });
+    expect(created.createFixture({
+      scenario: "chat.empty",
+      world: { count: 1, messages: ["x".repeat(512)] },
+    })).toMatchObject({ ok: false, error: { code: "oversized-fixture" } });
+  });
+
+  test("rejects limits that cannot carry every valid fixture through the query boundary", () => {
+    expect(tryDefineCarapace<TestWorld, TestRoute>({
       parseWorld: parseTestWorld,
       defaultScenario: "chat.empty",
       scenarios: [{
@@ -136,23 +316,24 @@ describe("Carapace definition", () => {
       coverage: [],
       maxFixtureBytes: 256,
       maxQueryBytes: 512,
-    });
-    if (!created.ok) throw new Error(created.error.message);
+    })).toMatchObject({ ok: false, error: { code: "invalid-limits" } });
+  });
 
-    expect(created.value.limits).toEqual({ maxFixtureBytes: 256, maxQueryBytes: 512 });
-    expect(Object.isFrozen(created.value.limits)).toBeTrue();
-    const serialized = created.value.serializeFixture({
+  test("activates an exactly byte-limit fixture with worst-case-heavy percent encoding", () => {
+    const created = definition();
+    const messages = ['"'.repeat(32_669)];
+    const serialized = created.serializeFixture({
       scenario: "chat.empty",
-      world: { count: 1, messages: ["portable"] },
+      world: { count: 0, messages },
     });
     if (!serialized.ok) throw new Error(serialized.error.message);
-    expect(created.value.parseFixtureJson(serialized.value)).toMatchObject({
+    expect(utf8ByteLength(serialized.value)).toBe(DEFAULT_MAX_FIXTURE_BYTES);
+
+    const query = `?${FIXTURE_QUERY_KEY}=${encodeURIComponent(serialized.value)}`;
+    expect(utf8ByteLength(query)).toBeLessThanOrEqual(DEFAULT_MAX_QUERY_BYTES);
+    expect(created.activate(query)).toMatchObject({
       ok: true,
-      value: { scenario: "chat.empty", route: "/chat", world: { count: 1 } },
+      value: { source: "fixture", world: { count: 0, messages } },
     });
-    expect(created.value.createFixture({
-      scenario: "chat.empty",
-      world: { count: 1, messages: ["x".repeat(512)] },
-    })).toMatchObject({ ok: false, error: { code: "oversized-fixture" } });
   });
 });

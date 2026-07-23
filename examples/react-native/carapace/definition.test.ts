@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { createCoverageCatalogSnapshot, SCENARIO_QUERY_KEY } from "@cclrte/carapace";
+import { SCENARIO_QUERY_KEY } from "@cclrte/carapace";
 
 import { deviceStatusCarapaceDefinition } from "./definition";
+import { createDeviceStatusCarapaceSession } from "./session";
 
 describe("React Native Carapace definition", () => {
   test("activates the default and every stable scenario", () => {
@@ -27,12 +28,14 @@ describe("React Native Carapace definition", () => {
       "native.platform.direct",
     ])).toEqual({ ok: true, value: true });
 
-    const snapshot = createCoverageCatalogSnapshot(deviceStatusCarapaceDefinition.coverage);
+    const created = createDeviceStatusCarapaceSession("");
+    if (!created.ok) throw new Error(created.error.message);
+    const snapshot = created.value.coverage;
     expect(snapshot.entries.at(-1)).toMatchObject({
       key: "native.platform.direct",
       mode: "direct",
-      route: null,
       scenarios: [],
     });
+    created.value.dispose();
   });
 });

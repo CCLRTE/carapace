@@ -22,7 +22,7 @@ describe("React Native Carapace browser mount", () => {
     const second = requiredMount();
     expect(second.session).not.toBe(first.session);
     expect(second.session.isDisposed()).toBeFalse();
-    expect(await second.session.product.port.inspect()).toEqual({
+    expect(await second.session.harness.port.inspect()).toEqual({
       platform: "ios",
       colorScheme: "light",
       capturedAt: "2026-01-15T14:30:00.000Z",

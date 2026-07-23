@@ -62,6 +62,15 @@ function validText(value: string, maximum: number): boolean {
   return true;
 }
 
+function validRoute(value: string): boolean {
+  if (value.trim().length === 0 || value.length > 256) return false;
+  for (const character of value) {
+    const code = character.charCodeAt(0);
+    if (code < 32 || code === 127) return false;
+  }
+  return true;
+}
+
 function scenarioError(code: ScenarioCatalogErrorCode, scenario: unknown, message: string): ScenarioCatalogError {
   return { code, scenario, message };
 }
@@ -87,7 +96,7 @@ export function createScenarioCatalog<World extends JsonValue, Route extends str
     if (input.description !== undefined && !validText(input.description, 2_000)) {
       return err(scenarioError("invalid-description", id.value, "Scenario descriptions must contain 1-2000 visible characters"));
     }
-    if (!validText(input.route, 256)) {
+    if (!validRoute(input.route)) {
       return err(scenarioError("invalid-route", id.value, "Scenario routes must contain 1-256 visible characters"));
     }
     const runtime = parseLogicalRuntimeSnapshot(input.runtime ?? DEFAULT_LOGICAL_RUNTIME_SNAPSHOT);

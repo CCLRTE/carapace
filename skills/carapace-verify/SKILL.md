@@ -7,7 +7,7 @@ description: Verify an existing Carapace composition, including strict activatio
 
 ## Discover the declared contract
 
-1. Read applicable `AGENTS.md` files, package scripts, Carapace definition, world parser, deterministic adapters, browser entry, verifier, and production-boundary policy.
+1. Read applicable `AGENTS.md` files, package scripts, Carapace definition, world parser, deterministic adapters, session construction, browser installation, verifier, and production-boundary policy.
 2. List every scenario and coverage entry before running commands.
 3. Map each `fixture`, `mixed`, and `direct` claim to the evidence required to close it.
 4. Identify the production adapter, service, host, operating system, or device behavior replaced by each deterministic port.
@@ -21,7 +21,7 @@ Run the repository's narrow Carapace typecheck, unit tests, property tests, and 
 
 Verify that tests cover malformed worlds, explicit activation failures, adapter failures, cancellation, cleanup, and exact-script drain behavior when applicable.
 
-When a browser verifier exists, drive stable scenario URLs and interact in product terms. Read the canonical `window.__carapace` bridge and parse its probe and coverage values. Do not trust ad hoc globals when the canonical bridge is available.
+When a browser verifier exists, drive stable scenario URLs and interact in product terms. Read only the canonical `window.__carapace` bridge and parse its probe and coverage values. Confirm that the installed coverage value matches the session's declared catalog. Do not accept compatibility or product-specific globals as equivalent evidence.
 
 ## Join the probe
 
@@ -48,11 +48,14 @@ When a bundler selects platform variants, require a paired source map for every 
 
 Report every coverage entry as one of:
 
-- `verified` when every declared scenario ran through the real behavior named by the claim and passed its claim-specific semantic assertions, or every named half of a mixed claim passed;
+- `verified` when every fixture scenario and direct gate required by the claim's declared mode ran through the named behavior and passed its claim-specific assertions;
+- `fixture-verified` when every declared fixture scenario for a mixed claim passed while its direct half remains open;
 - `partial` when some required evidence passed;
 - `not-exercised` when the run produced no evidence for the claim; or
 - `direct-required` when deterministic evidence cannot close the claim.
 
-Keep a direct claim `direct-required` until every named host behavior is exercised, even when unit tests provide supporting evidence. Note that support separately.
+A browser-only run keeps a direct claim `direct-required` and can report at most `fixture-verified` for a mixed claim. A wider run may report a mixed or direct claim as `verified` after every named direct behavior is exercised. Note supporting unit or structural evidence separately when it does not close the direct gate.
+
+Use `classifyCoverageEvidence` from `@cclrte/carapace/testing`. Pass only scenario IDs whose claim-specific assertions succeeded, and set direct evidence to verified only for a current passing direct gate. Do not hand-roll a looser status promotion.
 
 Include `HEAD` plus dirty or clean working-tree status, commands, scenario results, final probes, production surfaces scanned, retained artifacts, and exact failures. Report absent property tests, browser probes, or artifacts as `not present` or `not observed`. State skipped direct gates once. Do not use credentials, contact live services, or expand into device testing unless the user placed those systems in scope.
