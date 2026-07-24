@@ -146,7 +146,7 @@ Malformed encoding, duplicate activation, unknown reserved keys, unknown scenari
 This repository contains the deterministic kernel, browser bridge, production-exclusion pattern, agent skills, a small React example, and an Expo/React Native reference app. It does not contain a browser driver, browser-worker pool, screenshot deduplication, video recording, PySceneDetect integration, or storyboard generation. Use the browser tooling that fits your product and treat recorded media as evidence, not as the definition of correctness.
 
 <!-- article:carapace-a-harness-for-your-frontend:start -->
-## [Carapace makes state deterministic without copying the frontend](<https://prmte.com/articles/carapace-a-harness-for-your-frontend>)
+## [Carapace makes state deterministic without copying the frontend](<https://hraness.pub/articles/carapace-a-harness-for-your-frontend>)
 
 > Replace slow systems at a product-owned port, run the same interface against named worlds, and keep claims about the replaced system direct.
 
@@ -154,7 +154,7 @@ Frontend checks slow down when the state worth reviewing sits behind a login, a 
 
 Carapace changes the development composition below the behavior under review. The product keeps its real interface and feature state while deterministic adapters replace slow external systems. A Carapace definition names the available worlds and evidence claims, a session owns one activated world's lifecycle, and one browser installation exposes its probe while denying unmapped application requests. The product's verifier still chooses the actions, assertions, browser driver, and evidence.
 
-![The same interface cycles through named scenes, instant resets, and repeatable checks.](<https://prmte.com/article-diagrams/carapace-a-harness-for-your-frontend.light.webp>)
+![The same interface cycles through named scenes, instant resets, and repeatable checks.](<https://hraness.pub/article-diagrams/carapace-a-harness-for-your-frontend.light.webp>)
 
 *Carapace keeps the interface while making scenes quick to reset and check.*
 
@@ -254,7 +254,7 @@ Each store reset advances the session generation. Transactions and tracked opera
 
 A fixed delay waits for a duration. Quiescence means that the active scenario has reached its declared readiness conditions. The session probe requires no active operations and all product-named pending counters at zero. The product verifier then checks that the generation, revision, activity totals, and counters remain unchanged for a short, bounded interval. It may separately wait for fonts, nearby images, or document stability when a claim needs visual evidence.
 
-The probe reports violation counters and remaining scripted work outside the quiescence gate. A verifier must separately reject an unhandled request, unused required script step, console error, runtime error, leaked work token, or malformed transport value when that signal matters to the claim. [Types and property tests in an agent-operated codebase](<https://prmte.com/articles/the-ai-codebase-types-and-property-tests>) help at this boundary. Strict parsers reject malformed worlds, while generated tests challenge reset, cancellation, serialization, and ordering laws across many inputs.
+The probe reports violation counters and remaining scripted work outside the quiescence gate. A verifier must separately reject an unhandled request, unused required script step, console error, runtime error, leaked work token, or malformed transport value when that signal matters to the claim. [Types and property tests in an agent-operated codebase](<https://hraness.pub/articles/the-ai-codebase-types-and-property-tests>) help at this boundary. Strict parsers reject malformed worlds, while generated tests challenge reset, cancellation, serialization, and ordering laws across many inputs.
 
 The browser-driver helper remains product-owned. In this illustrative Playwright check, `waitForQuiescence` reads the probe until those readiness conditions remain stable. It then rejects relevant violations and required remaining work:
 
