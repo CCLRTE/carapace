@@ -8,11 +8,11 @@
   "packageManager": "bun@1.3.14",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/CCLRTE/carapace.git"
+    "url": "git+https://github.com/hraness/carapace.git"
   },
-  "homepage": "https://github.com/CCLRTE/carapace#readme",
+  "homepage": "https://github.com/hraness/carapace#readme",
   "bugs": {
-    "url": "https://github.com/CCLRTE/carapace/issues"
+    "url": "https://github.com/hraness/carapace/issues"
   },
   "keywords": [
     "typescript",

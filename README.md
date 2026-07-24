@@ -20,8 +20,8 @@ The normal lifecycle has three owners: a definition validates named worlds and c
 Copy this prompt into Codex, Claude Code, or another coding agent:
 
 ```text
-Install CCLRTE/carapace and its bundled Agent Skills from
-https://github.com/CCLRTE/carapace at the immutable v0.3.0 tag. Follow the
+Install hraness/carapace and its bundled Agent Skills from
+https://github.com/hraness/carapace at the immutable v0.3.0 tag. Follow the
 repository README, add `@cclrte/carapace` to devDependencies only, copy or link
 `carapace-setup` and `carapace-verify` into this agent runner's configured
 skills directory, and verify that the production dependency graph excludes
@@ -37,7 +37,7 @@ Pin the public repository to an immutable version tag:
 ```json
 {
   "devDependencies": {
-    "@cclrte/carapace": "github:CCLRTE/carapace#v0.3.0"
+    "@cclrte/carapace": "github:hraness/carapace#v0.3.0"
   }
 }
 ```
@@ -106,7 +106,7 @@ globalThis.addEventListener("pagehide", session.dispose, { once: true });
 
 The session supplies the parsed world, generation-safe store, logical clock, activity scope, cancellation signal, probe, coverage value, and reverse-order cleanup. The browser installer derives its probe and coverage from that session, blocks unmapped `fetch` calls by default, rolls back partial installation, and registers teardown with `session.dispose()`.
 
-See the [Todo example](https://github.com/CCLRTE/carapace/tree/main/examples/todos) for a strict parser, product-owned port, React workbench, and emitted-graph boundary verifier. The [React Native example](https://github.com/CCLRTE/carapace/tree/main/examples/react-native) uses the same session model in a platform-resolved Expo composition while keeping native production graphs Carapace-free.
+See the [Todo example](https://github.com/hraness/carapace/tree/main/examples/todos) for a strict parser, product-owned port, React workbench, and emitted-graph boundary verifier. The [React Native example](https://github.com/hraness/carapace/tree/main/examples/react-native) uses the same session model in a platform-resolved Expo composition while keeping native production graphs Carapace-free.
 
 ## Keep evidence honest
 
@@ -181,7 +181,7 @@ product/
 
 The filenames are illustrative. The ownership rule is fixed: production and deterministic adapters implement the same product-owned port, the real interface stays above both, and the Carapace definition, workbench, and verifier stay outside the production graph. A scenario is named initial state, route, and logical-runtime state. It is not a script of browser actions.
 
-The [public Todo example](<https://github.com/CCLRTE/carapace/tree/main/examples/todos>) shows that boundary in code. The real `TodoApp` knows only the product's `TodoPort`. The production entry supplies browser storage. The Carapace session supplies a deterministic port:
+The [public Todo example](<https://github.com/hraness/carapace/tree/main/examples/todos>) shows that boundary in code. The real `TodoApp` knows only the product's `TodoPort`. The production entry supplies browser storage. The Carapace session supplies a deterministic port:
 
 **todo-port.ts composition (illustrative excerpt)**
 
