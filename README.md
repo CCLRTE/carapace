@@ -15,6 +15,23 @@ The normal lifecycle has three owners: a definition validates named worlds and c
 
 ## Install
 
+### Tell your coding agent to install it
+
+Copy this prompt into Codex, Claude Code, or another coding agent:
+
+```text
+Install CCLRTE/carapace and its bundled Agent Skills from
+https://github.com/CCLRTE/carapace at the immutable v0.3.0 tag. Follow the
+repository README, add `@cclrte/carapace` to devDependencies only, copy or link
+`carapace-setup` and `carapace-verify` into this agent runner's configured
+skills directory, and verify that the production dependency graph excludes
+Carapace. Do not add a fixture composition until I ask.
+```
+
+The tagged package and repository carry the same skill directories. Package
+installation leaves them inert until an agent places them in its
+runner-specific discovery path.
+
 Pin the public repository to an immutable version tag:
 
 ```json
